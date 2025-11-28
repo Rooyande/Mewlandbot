@@ -565,14 +565,13 @@ async def cmd_gift(message: types.Message):
         f"🎁 گربه {cat['name']} (#{cat_id}) رو به {target.first_name} هدیه دادی!"
     )
 
-
 @dp.message_handler(commands=["leaderboard"])
 async def cmd_leaderboard(message: types.Message):
     try:
         rows = get_leaderboard(limit=10)
     except Exception as e:
-        logging.exception("Error in /leaderboard: %s", e)
-        await message.reply("یه باگ خوردیم تو لیدربورد 😿 چند دقیقه دیگه دوباره امتحان کن.")
+        logging.exception("Error fetching leaderboard: %s", e)
+        await message.reply("یه خطا تو گرفتن لیدربورد خوردیم 😿 چند دقیقه دیگه دوباره امتحان کن.")
         return
 
     if not rows:
@@ -582,14 +581,25 @@ async def cmd_leaderboard(message: types.Message):
         )
         return
 
-    lines = []
+    lines = ["🏆 لیست میوکینگ‌ها:\n"]
     for idx, row in enumerate(rows, start=1):
-        username = row.get("username") or f"user_{row.get('telegram_id')}"
-        points = row.get("mew_points", 0)
-        lines.append(f"{idx}. {username} — {points} میوپوینت")
+        username = row.get("username")
+        if not username:
+            username = str(row.get("telegram_id", "ناشناس"))
+        username = str(username)
 
-    text = "🏆 *لیست میوکینگ‌ها:*\n\n" + "\n".join(lines)
-    await message.reply(text, parse_mode="Markdown")
+        points = row.get("mew_points") or 0
+        lines.append(f"{idx}. {username} - {points} میوپوینت")
+
+    text = "\n".join(lines)
+
+    try:
+        # بدون Markdown، تا یوزرنیم‌های عجیب اذیت نکنن
+        await message.reply(text)
+    except Exception as e:
+        logging.exception("Error sending leaderboard message: %s", e)
+        await message.reply("لیدربورد آماده شد ولی تلگرام تو فرمت پیام گیر کرد 😿 بعداً دوباره امتحان کن.")
+
 
 # ---------- هندلر mew ----------
 
