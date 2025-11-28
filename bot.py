@@ -568,34 +568,28 @@ async def cmd_gift(message: types.Message):
 
 @dp.message_handler(commands=["leaderboard"])
 async def cmd_leaderboard(message: types.Message):
-    if message.chat.type in ("group", "supergroup"):
-        users = get_group_users(message.chat.id)
-        title = "🏆 لیدربورد این گروه:"
-    else:
-        users = get_all_users()
-        title = "🏆 لیدربورد کلی مِولَند:"
-
-    if not users:
-        await message.reply("هنوز هیچ بازیکنی ثبت نشده!")
+    try:
+        rows = get_leaderboard(limit=10)
+    except Exception as e:
+        logging.exception("Error in /leaderboard: %s", e)
+        await message.reply("یه باگ خوردیم تو لیدربورد 😿 چند دقیقه دیگه دوباره امتحان کن.")
         return
 
-    users_sorted = sorted(
-        users,
-        key=lambda u: u.get("mew_points", 0),
-        reverse=True,
-    )[:10]
+    if not rows:
+        await message.reply(
+            "هنوز هیچ‌کس میو نزده 😿\n"
+            "اولین نفر تو باش و توی گروه فقط بنویس: mew"
+        )
+        return
 
     lines = []
-    for i, u in enumerate(users_sorted, start=1):
-        uname = u.get("username") or f"user_{u['telegram_id']}"
-        if not uname.startswith("@"):
-            uname = f"@{uname}"
-        mp = u.get("mew_points", 0)
-        lines.append(f"{i}. {uname} – {mp} میوپوینت")
+    for idx, row in enumerate(rows, start=1):
+        username = row.get("username") or f"user_{row.get('telegram_id')}"
+        points = row.get("mew_points", 0)
+        lines.append(f"{idx}. {username} — {points} میوپوینت")
 
-    text = title + "\n" + "\n".join(lines)
-    await message.reply(text)
-
+    text = "🏆 *لیست میوکینگ‌ها:*\n\n" + "\n".join(lines)
+    await message.reply(text, parse_mode="Markdown")
 
 # ---------- هندلر mew ----------
 
