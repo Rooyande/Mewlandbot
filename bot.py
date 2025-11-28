@@ -7,19 +7,19 @@ from aiohttp import web
 from aiogram import Bot, Dispatcher, types
 
 from db import (
-    init_db,
     get_user,
     get_or_create_user,
     update_user_mew,
+    get_all_users,
+    register_user_group,
+    get_group_users,
     get_user_cats,
     add_cat,
     get_cat,
     update_cat_stats,
-    get_group_users,
-    get_all_users,
-    register_user_group,
     rename_cat,
     set_cat_owner,
+    get_leaderboard,  # 👈 حتماً این باشه
 )
 
 logging.basicConfig(level=logging.INFO)
@@ -583,19 +583,15 @@ async def cmd_leaderboard(message: types.Message):
 
     lines = ["🏆 لیست میوکینگ‌ها:\n"]
     for idx, row in enumerate(rows, start=1):
-        username = row.get("username")
-        if not username:
-            username = str(row.get("telegram_id", "ناشناس"))
+        username = row.get("username") or str(row.get("telegram_id", "ناشناس"))
         username = str(username)
-
         points = row.get("mew_points") or 0
         lines.append(f"{idx}. {username} - {points} میوپوینت")
 
     text = "\n".join(lines)
 
     try:
-        # بدون Markdown، تا یوزرنیم‌های عجیب اذیت نکنن
-        await message.reply(text)
+        await message.reply(text)  # بدون Markdown تا یوزرنیم‌های عجیب مشکل نسازن
     except Exception as e:
         logging.exception("Error sending leaderboard message: %s", e)
         await message.reply("لیدربورد آماده شد ولی تلگرام تو فرمت پیام گیر کرد 😿 بعداً دوباره امتحان کن.")
