@@ -1,10 +1,11 @@
 # db.py
-# اتصال به Supabase با REST API (نه Postgres مستقیم)
+# اتصال به Supabase از طریق REST API
 
 import os
 import time
 import requests
 
+# ---------- تنظیمات Supabase ----------
 
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY")
@@ -24,7 +25,7 @@ BASE_HEADERS = {
 
 # ---------- Helperهای پایه ----------
 
-def _get(table: str, params: dict):
+def _get(table: str, params: dict | None = None):
     p = dict(params or {})
     if "select" not in p:
         p["select"] = "*"
@@ -55,10 +56,12 @@ def _insert(table: str, data: dict):
 def _update(table: str, filters: dict, data: dict):
     if not data:
         return None
+
     headers = dict(BASE_HEADERS)
     headers["Prefer"] = "return=representation"
     params = dict(filters or {})
     params["select"] = "*"
+
     r = requests.patch(
         f"{BASE_REST}/{table}",
         headers=headers,
@@ -72,7 +75,7 @@ def _update(table: str, filters: dict, data: dict):
 
 
 def init_db():
-    # اینجا می‌تونست چک سلامت سوپابیس باشه، فعلاً لازم نیست
+    # اگر خواستی می‌تونی اینجا یه چک سلامت هم بزنی
     return
 
 
@@ -106,13 +109,30 @@ def update_user_mew(telegram_id: int, mew_points=None, last_mew_ts=None):
         data["mew_points"] = mew_points
     if last_mew_ts is not None:
         data["last_mew_ts"] = last_mew_ts
+
     if not data:
         return
+
     _update("users", {"telegram_id": f"eq.{telegram_id}"}, data)
 
 
 def get_all_users():
     return _get("users", {})
+
+
+def get_leaderboard(limit: int = 10):
+    """
+    برمی‌گردونه top N یوزر بر اساس mew_points (بیشترین به کمترین)
+    """
+    rows = _get(
+        "users",
+        {
+            "select": "telegram_id,username,mew_points",
+            "order": "mew_points.desc",
+            "limit": limit,
+        },
+    )
+    return rows or []
 
 
 # ---------- USER_GROUPS ----------
@@ -127,6 +147,7 @@ def register_user_group(user_id: int, chat_id: int):
     )
     if rows:
         return
+
     data = {
         "user_id": user_id,
         "chat_id": chat_id,
@@ -229,17 +250,3 @@ def set_cat_owner(cat_id: int, new_owner_id: int):
         {"id": f"eq.{cat_id}"},
         {"owner_id": new_owner_id},
     )
-
-def get_leaderboard(limit: int = 10):
-    """
-    برمی‌گردونه top N یوزر بر اساس mew_points
-    """
-    res = supabase.table("users") \
-        .select("telegram_id, username, mew_points") \
-        .order("mew_points", desc=True) \
-        .limit(limit) \
-        .execute()
-
-    data = res.data or []
-    return data
-
