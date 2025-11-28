@@ -1,652 +1,673 @@
-# bot.py
 import os
 import logging
-import random
 import time
-from datetime import datetime
+import random
 
+from aiohttp import web
 from aiogram import Bot, Dispatcher, types
-from aiogram.types import (
-    ReplyKeyboardMarkup,
-    KeyboardButton,
-    InlineKeyboardMarkup,
-    InlineKeyboardButton,
-)
-from aiogram.utils.executor import start_webhook  # مهم: وب‌هوک
 
 from db import (
     init_db,
-    get_or_create_user,
     get_user,
+    get_or_create_user,
     update_user_mew,
-    register_user_group,
-    get_group_users,
-    get_all_users,
     get_user_cats,
     add_cat,
     get_cat,
     update_cat_stats,
+    get_group_users,
+    get_all_users,
+    register_user_group,
+    rename_cat,
+    set_cat_owner,
 )
-
-# ---------------- تنظیمات اصلی ----------------
-BOT_TOKEN = os.getenv("BOT_TOKEN")  # از Render ست می‌کنی
-if not BOT_TOKEN:
-    raise RuntimeError("BOT_TOKEN env var is not set")
-
-# تنظیمات وب‌هوک / وب‌سرور برای Render
-WEBAPP_HOST = "0.0.0.0"
-WEBAPP_PORT = int(os.getenv("PORT", 8000))  # Render خودش PORT رو می‌ذاره
-
-# Render معمولاً متغیر RENDER_EXTERNAL_URL رو می‌ذاره، مثل:
-# https://your-service.onrender.com
-BASE_URL = os.getenv("WEBHOOK_BASE_URL") or os.getenv("RENDER_EXTERNAL_URL")
-if not BASE_URL:
-    # اگر برای هر دلیلی ست نشده بود، خودت می‌تونی WEBHOOK_BASE_URL رو دستی تو Render بذاری
-    raise RuntimeError("RENDER_EXTERNAL_URL or WEBHOOK_BASE_URL env var is not set")
-
-WEBHOOK_PATH = f"/webhook/{BOT_TOKEN}"
-WEBHOOK_URL = BASE_URL.rstrip("/") + WEBHOOK_PATH
-
-MEW_COOLDOWN_SECONDS = 7 * 60   # کول‌داون میو
-MEW_REWARD = 10                 # امتیاز هر میو
-CAT_COST = 100                  # هزینه‌ی گرفتن گربه
-
-TICK_HOURS = 3
-TICK_SECONDS = TICK_HOURS * 3600
-
-# rarity و احتمال
-RARITIES = [
-    ("Common",   0.55),
-    ("Uncommon", 0.25),
-    ("Rare",     0.12),
-    ("Epic",     0.06),
-    ("Mythical", 0.015),
-    ("Cosmic",   0.005),
-]
-
-RARITY_WEIGHTS = {
-    "Common":   1,
-    "Uncommon": 2,
-    "Rare":     4,
-    "Epic":     8,
-    "Mythical": 15,
-    "Cosmic":   30,
-}
-
-ELEMENT_BONUS = {
-    "Street": 1.0,
-    "Flame":  1.1,
-    "Shadow": 1.1,
-    "Nature": 1.0,
-    "Royal":  1.2,
-    "Cosmic": 1.3,
-}
-
-ELEMENT_FA = {
-    "Street": "خیابانی",
-    "Flame":  "آتیشی",
-    "Shadow": "سایه‌ای",
-    "Nature": "طبیعتی",
-    "Royal":  "سلطنتی",
-    "Cosmic": "کیهانی",
-}
-
-TRAITS = [
-    "خوابالو",
-    "کیبوردنَشین",
-    "گلدون‌سقّاط‌کن",
-    "موش‌باز حرفه‌ای",
-    "ضد جاروبرقی",
-    "گنگستر محله",
-    "خجالتی و دل‌نازک",
-    "پررو و بامزه",
-]
-
-ADJECTIVES = [
-    "خوابالو",
-    "افسانه‌ای",
-    "بدقلق",
-    "خیلی اجتماعی",
-    "دیوانه‌وار پرانرژی",
-    "خفن و مرموز",
-]
-
-HABITS = [
-    "روی کیبورد می‌خوابد",
-    "نیمه‌شب روی پشت‌بام آواز می‌خواند",
-    "پلاستیک گاز می‌زند",
-    "هرچی روی میز است را هل می‌دهد پایین",
-    "روی گوشی‌ات می‌نشیند وقتی لازمش داری",
-]
-
-FEARS = [
-    "جاروبرقی",
-    "آدم‌هایی که می‌گویند سگ از گربه بهتر است",
-    "دوش حمام",
-    "درِ بستهٔ یخچال",
-]
-
-TICK_EVENTS = [
-    {
-        "text": "یک موش شکار کرد و کلی ذوق کرد! (+۵ XP، +۵ شادی، -۲ گرسنگی)",
-        "dxp": 5,
-        "dhunger": -2,
-        "dhappy": 5,
-        "dmew": 0,
-    },
-    {
-        "text": "روی کیبورد خوابید و گرم شد. (+۳ XP، +۳ شادی)",
-        "dxp": 3,
-        "dhunger": 0,
-        "dhappy": 3,
-        "dmew": 0,
-    },
-    {
-        "text": "با جاروبرقی دعوا کرد. (+۲ XP، -۵ شادی)",
-        "dxp": 2,
-        "dhunger": 0,
-        "dhappy": -5,
-        "dmew": 0,
-    },
-    {
-        "text": "در آشپزخانه چیزی انداخت پایین! (-۳ شادی، -۱ گرسنگی)",
-        "dxp": 0,
-        "dhunger": -1,
-        "dhappy": -3,
-        "dmew": 0,
-    },
-]
 
 logging.basicConfig(level=logging.INFO)
 
-bot = Bot(token=BOT_TOKEN, parse_mode="HTML")
+BOT_TOKEN = os.getenv("BOT_TOKEN")
+if not BOT_TOKEN:
+    raise RuntimeError("BOT_TOKEN تنظیم نشده است.")
+
+bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher(bot)
 
-# ---------------- کیبورد اصلی ----------------
-main_kb = ReplyKeyboardMarkup(resize_keyboard=True)
-main_kb.add(KeyboardButton("میــــو 😺"))
-main_kb.add(
-    KeyboardButton("✨ گرفتن گربه"),
-    KeyboardButton("🐱 گربه‌هام"),
+# ---------- تنظیمات وبهوک / سرور ----------
+
+# Render معمولاً RENDER_EXTERNAL_URL می‌دهد
+BASE_URL = (
+    os.getenv("WEBHOOK_BASE_URL")
+    or os.getenv("RENDER_EXTERNAL_URL")
+    or "https://mewlandbot.onrender.com"
 )
+WEBHOOK_PATH = f"/webhook/{BOT_TOKEN}"
+WEBHOOK_URL = BASE_URL.rstrip("/") + WEBHOOK_PATH
 
-# ---------------- توابع کمکی گیم ----------------
-def choose_rarity():
-    r = random.random()
-    cumulative = 0
-    for name, prob in RARITIES:
-        cumulative += prob
-        if r <= cumulative:
+APP_HOST = "0.0.0.0"
+APP_PORT = int(os.getenv("PORT", "10000"))
+
+# ---------- تنظیمات بازی ----------
+
+MEW_COOLDOWN_SEC = 7 * 60
+
+COST_ADOPT = 30
+COST_FEED = 5
+COST_PLAY = 3
+COST_TRAIN = 8
+
+XP_PER_PLAY = 5
+XP_PER_TRAIN = 15
+
+HUNGER_DECAY_PER_HOUR = 3
+HAPPINESS_DECAY_PER_HOUR = 2
+
+RARITY_WEIGHTS = [
+    ("common", 60),
+    ("rare", 25),
+    ("epic", 10),
+    ("legendary", 4),
+    ("mythic", 1),
+]
+
+RARITY_ORDER = {
+    "common": 1,
+    "rare": 2,
+    "epic": 3,
+    "legendary": 4,
+    "mythic": 5,
+}
+
+ELEMENTS = ["fire", "water", "shadow", "nature", "cosmic"]
+TRAITS = ["lazy", "hyper", "greedy", "cursed", "chill", "chaotic", "sleepy", "noisy"]
+
+CAT_NAMES = [
+    "Luna",
+    "Pixel",
+    "Nacho",
+    "Mochi",
+    "Neko",
+    "Shadow",
+    "Pumpkin",
+    "Bean",
+    "Miso",
+    "Zuzu",
+]
+
+
+# ---------- Helperها ----------
+
+def choose_rarity() -> str:
+    r = random.randint(1, 100)
+    acc = 0
+    for name, weight in RARITY_WEIGHTS:
+        acc += weight
+        if r <= acc:
             return name
-    return RARITIES[-1][0]
+    return "common"
 
 
-def generate_cat_meta():
-    element = random.choice(list(ELEMENT_BONUS.keys()))
-    trait = random.choice(TRAITS)
-    adj = random.choice(ADJECTIVES)
-    habit = random.choice(HABITS)
-    fear = random.choice(FEARS)
+def clamp(val, lo=0, hi=100):
+    return max(lo, min(hi, val))
 
-    element_fa = ELEMENT_FA.get(element, element)
 
-    description = (
-        f"این گربه‌ی {adj} از نوع {element_fa} است که معمولاً {habit} "
-        f"و از {fear} متنفر است."
+def apply_decay(cat: dict) -> dict:
+    """
+    decay بر اساس last_tick_ts
+    """
+    now = int(time.time())
+    last = cat.get("last_tick_ts") or now
+    delta_sec = max(0, now - last)
+    hours = delta_sec // 3600
+    if hours <= 0:
+        return cat
+
+    hunger = clamp(cat.get("hunger", 50) - HUNGER_DECAY_PER_HOUR * hours)
+    happiness = clamp(cat.get("happiness", 50) - HAPPINESS_DECAY_PER_HOUR * hours)
+    xp = cat.get("xp", 0)
+    level = cat.get("level", 1)
+
+    update_cat_stats(
+        cat_id=cat["id"],
+        owner_id=cat["owner_id"],
+        hunger=hunger,
+        happiness=happiness,
+        xp=xp,
+        level=level,
+        last_tick_ts=now,
     )
-    return element, trait, description
+
+    cat["hunger"] = hunger
+    cat["happiness"] = happiness
+    cat["xp"] = xp
+    cat["level"] = level
+    cat["last_tick_ts"] = now
+    return cat
 
 
-def max_hunger_for_level(level: int) -> int:
-    return 100 + (level - 1) * 5
+def apply_levelup(cat: dict):
+    """
+    اگر xp کافی باشد، level up می‌کند.
+    """
+    leveled = False
+    old_level = cat.get("level", 1)
+    xp = cat.get("xp", 0)
+    level = old_level
+
+    while True:
+        xp_needed = level * 20
+        if xp >= xp_needed:
+            xp -= xp_needed
+            level += 1
+            leveled = True
+        else:
+            break
+
+    if leveled:
+        now = int(time.time())
+        update_cat_stats(
+            cat_id=cat["id"],
+            owner_id=cat["owner_id"],
+            hunger=cat.get("hunger", 50),
+            happiness=cat.get("happiness", 50),
+            xp=xp,
+            level=level,
+            last_tick_ts=now,
+        )
+        cat["xp"] = xp
+        cat["level"] = level
+        cat["last_tick_ts"] = now
+
+    return leveled, old_level, cat.get("level", old_level)
 
 
-def max_happiness_for_level(level: int) -> int:
-    return 100 + (level - 1) * 5
-
-
-def xp_needed_for_next_level(level: int) -> int:
-    return level * 50
-
-
-def cat_power(cat_row):
-    rarity = cat_row["rarity"]
-    element = cat_row["element"]
-    level = cat_row["level"]
-    base = RARITY_WEIGHTS.get(rarity, 1)
-    bonus = ELEMENT_BONUS.get(element, 1.0)
-    return int(level * base * bonus)
-
-
-def format_cat(cat_row):
-    cat_id = cat_row["id"]
-    name = cat_row["name"]
-    rarity = cat_row["rarity"]
-    element = cat_row["element"]
-    trait = cat_row["trait"]
-    description = cat_row["description"]
-    level = cat_row["level"]
-    xp = cat_row["xp"]
-    hunger = cat_row["hunger"]
-    happiness = cat_row["happiness"]
-    created_at = cat_row["created_at"]
-
-    created_str = datetime.fromtimestamp(created_at).strftime("%Y-%m-%d %H:%M")
-    element_fa = ELEMENT_FA.get(element, element)
-
+def format_cat(cat: dict) -> str:
     return (
-        f"🐱 <b>{name}</b> [ID: <code>{cat_id}</code>]\n"
-        f"✨ Rarity: <b>{rarity}</b> | نوع: <b>{element_fa}</b>\n"
-        f"😼 خصوصیت: <i>{trait}</i>\n"
-        f"📈 Level: <b>{level}</b> | XP: <b>{xp}</b> / {xp_needed_for_next_level(level)}\n"
-        f"🍗 Hunger: <b>{hunger}/{max_hunger_for_level(level)}</b>\n"
-        f"🎮 Happiness: <b>{happiness}/{max_happiness_for_level(level)}</b>\n"
-        f"📅 Created: <i>{created_str}</i>\n\n"
-        f"🧾 توضیح:\n{description}"
+        f"🐱 {cat['name']} #{cat['id']}\n"
+        f"rarity: {cat['rarity']} | element: {cat['element']} | trait: {cat['trait']}\n"
+        f"level: {cat.get('level', 1)} (xp: {cat.get('xp', 0)})\n"
+        f"hunger: {cat.get('hunger', 0)}/100 | happiness: {cat.get('happiness', 0)}/100\n"
+        f"desc: {cat.get('description', '')}"
     )
 
 
-def cat_inline_kb(cat_id):
-    kb = InlineKeyboardMarkup()
-    kb.add(InlineKeyboardButton("🍗 غذا دادن", callback_data=f"feed:{cat_id}"))
-    return kb
+def parse_cat_id_from_message(message: types.Message) -> int | None:
+    parts = message.text.strip().split()
+    if len(parts) < 2:
+        return None
+    try:
+        return int(parts[1])
+    except ValueError:
+        return None
 
 
-def ensure_user_and_group(message: types.Message):
-    user_telegram_id = message.from_user.id
+# ---------- Command Handlers ----------
+
+@dp.message_handler(commands=["start"])
+async def cmd_start(message: types.Message):
+    tg_id = message.from_user.id
     username = message.from_user.username
-    user_id = get_or_create_user(user_telegram_id, username)
+    user_id = get_or_create_user(tg_id, username)
 
     if message.chat.type in ("group", "supergroup"):
         register_user_group(user_id, message.chat.id)
 
-    return user_id
+    text = (
+        "به مِولَند خوش اومدی 😼\n\n"
+        "هر ۷ دقیقه یک‌بار تو گروه بنویس `mew` تا میوپوینت بگیری.\n"
+        "با `/adopt` می‌تونی اولین گربه‌تو بگیری.\n"
+        "با `/mycats` گربه‌هات رو ببین، و با `/leaderboard` ببین کی خفن‌تره."
+    )
+    await message.reply(text, parse_mode="Markdown")
 
 
-def process_cat_ticks(cat_row, user_row):
-    now = int(time.time())
-    last_tick = cat_row["last_tick_ts"] or cat_row["created_at"]
+@dp.message_handler(commands=["profile"])
+async def cmd_profile(message: types.Message):
+    tg_id = message.from_user.id
+    username = message.from_user.username
+    user_id = get_or_create_user(tg_id, username)
 
-    delta = now - last_tick
-    ticks = delta // TICK_SECONDS
+    user_row = get_user(tg_id)
+    cats = get_user_cats(user_id)
+    mew_points = user_row.get("mew_points", 0) if user_row else 0
+    num_cats = len(cats)
 
-    if ticks <= 0:
-        return cat_row, "", user_row
+    rarest = None
+    for c in cats:
+        if rarest is None:
+            rarest = c
+        else:
+            if RARITY_ORDER.get(c["rarity"], 0) > RARITY_ORDER.get(rarest["rarity"], 0):
+                rarest = c
 
-    hunger = cat_row["hunger"]
-    happiness = cat_row["happiness"]
-    xp = cat_row["xp"]
-    level = cat_row["level"]
+    uname_display = "@" + username if username else f"user_{tg_id}"
 
-    mew_points = user_row["mew_points"]
-    last_mew_ts = user_row["last_mew_ts"]
+    text = f"👤 پروفایل {uname_display}\n\n"
+    text += f"میوپوینت: {mew_points}\n"
+    text += f"تعداد گربه‌ها: {num_cats}\n"
 
-    events_text = []
-
-    for _ in range(int(ticks)):
-        hunger -= 5
-        happiness -= 3
-
-        if random.random() < 0.4:
-            ev = random.choice(TICK_EVENTS)
-            xp += ev["dxp"]
-            hunger += ev["dhunger"]
-            happiness += ev["dhappy"]
-            mew_points += ev["dmew"]
-            events_text.append(ev["text"])
-
-        while xp >= xp_needed_for_next_level(level):
-            xp -= xp_needed_for_next_level(level)
-            level += 1
-
-        max_h = max_hunger_for_level(level)
-        max_hp = max_happiness_for_level(level)
-
-        hunger = max(0, min(max_h, hunger))
-        happiness = max(0, min(max_hp, happiness))
-        xp = max(0, xp)
-
-    update_user_mew(user_row["telegram_id"], mew_points, last_mew_ts)
-    update_cat_stats(cat_row["id"], cat_row["owner_id"], hunger, happiness, xp, level, now)
-
-    new_user = get_user(user_row["telegram_id"])
-    new_cat = get_cat(cat_row["id"], cat_row["owner_id"])
-
-    extra_text = ""
-    if events_text:
-        extra_text = "📜 در این مدت که نبودی:\n" + "\n".join("• " + t for t in events_text)
-
-    return new_cat, extra_text, new_user
-
-
-# ---------------- هندلرها ----------------
-@dp.message_handler(commands=["start"])
-async def cmd_start(message: types.Message):
-    ensure_user_and_group(message)
-
-    if message.chat.type == "private":
-        await message.answer(
-            "به <b>میولند</b> خوش اومدی! 🐾\n"
-            "اینجا می‌تونی با «میو» کردن، میوپوینت جمع کنی، گربه بگیری، بزرگش کنی و باهاش زندگی کنی.\n\n"
-            "✅ از گروه‌ها هم می‌تونی استفاده کنی، فقط بات رو به گروه اضافه کن و میو کن!\n\n"
-            "دکمه‌های پایین رو بزن و شروع کن:",
-            reply_markup=main_kb,
+    if rarest:
+        text += (
+            "\n✨ Rareترین گربه:\n"
+            f"{rarest['name']} (#{rarest['id']}) – {rarest['rarity']} / {rarest['element']} / lvl {rarest.get('level', 1)}"
         )
     else:
-        await message.answer(
-            "من بات گربه‌های <b>میولند</b> هستم 😺\n"
-            "اینجا توی گروه هم می‌تونی «میو» کنی و گربه بگیری.\n"
-            "برای مدیریت کامل کالکشن گربه‌هات، می‌تونی بهم توی پی‌وی هم /start بدی."
-        )
+        text += "\nهنوز هیچ گربه‌ای نداری. با /adopt یکی بگیر 😺"
+
+    await message.reply(text)
 
 
-@dp.message_handler(commands=["help"])
-async def cmd_help(message: types.Message):
-    await message.answer(
-        "راهنمای کوتاه میولند 🐾\n\n"
-        "/start – شروع و ثبت‌نام\n"
-        "/adopt – اگر میوپوینت کافی داشته باشی، یک گربه جدید می‌گیری\n"
-        "/cats – لیست گربه‌هات\n"
-        "/cat_1 – جزئیات گربه با ID=1\n"
-        "/top – لیدربورد همین گروه بر اساس قدرت گربه‌ها\n"
-        "/top_global – لیدربورد جهانی\n\n"
-        "یا از دکمه‌های «میــــو 😺»، «✨ گرفتن گربه» و «🐱 گربه‌هام» استفاده کن."
-    )
+@dp.message_handler(commands=["mycats"])
+async def cmd_mycats(message: types.Message):
+    tg_id = message.from_user.id
+    username = message.from_user.username
+    user_id = get_or_create_user(tg_id, username)
 
-
-@dp.message_handler(lambda m: m.text and m.text.strip() in ["میو", "meow", "Meow", "میــــو 😺"])
-async def handle_mew(message: types.Message):
-    ensure_user_and_group(message)
-
-    u = get_user(message.from_user.id)
-    if not u:
-        get_or_create_user(message.from_user.id, message.from_user.username)
-        u = get_user(message.from_user.id)
-
-    mew_points = u["mew_points"]
-    last_mew_ts = u["last_mew_ts"]
-    now = int(time.time())
-
-    if last_mew_ts is not None and now - last_mew_ts < MEW_COOLDOWN_SECONDS:
-        remaining = MEW_COOLDOWN_SECONDS - (now - last_mew_ts)
-        mins = remaining // 60
-        secs = remaining % 60
-        await message.reply(
-            f"هنوز زوده برای میو بعدی 😼\n"
-            f"⏳ مونده: {mins:02d}:{secs:02d}"
-        )
+    cats = get_user_cats(user_id)
+    if not cats:
+        await message.reply("هنوز هیچ گربه‌ای نداری! با /adopt یکی بگیر 😺")
         return
 
-    mew_points += MEW_REWARD
-    update_user_mew(message.from_user.id, mew_points, now)
+    lines = []
+    for c in cats:
+        lines.append(
+            f"#{c['id']} – {c['name']} | ⭐ {c['rarity']} | lvl {c.get('level', 1)} | 😋 {c.get('hunger', 0)} | 😊 {c.get('happiness', 0)}"
+        )
 
-    await message.reply(
-        f"میــــو! 😺\n"
-        f"+{MEW_REWARD} میوپوینت گرفتی.\n"
-        f"مجموع: <b>{mew_points}</b> میوپوینت.",
-        reply_markup=(main_kb if message.chat.type == "private" else None),
-    )
+    text = "🐱 گربه‌هات:\n" + "\n".join(lines)
+    await message.reply(text)
 
 
 @dp.message_handler(commands=["adopt"])
 async def cmd_adopt(message: types.Message):
-    await handle_get_cat(message)
+    tg_id = message.from_user.id
+    username = message.from_user.username
+    user_id = get_or_create_user(tg_id, username)
 
+    user_row = get_user(tg_id)
+    mew_points = user_row.get("mew_points", 0) if user_row else 0
 
-@dp.message_handler(lambda m: m.text == "✨ گرفتن گربه")
-async def handle_get_cat(message: types.Message):
-    ensure_user_and_group(message)
-
-    u = get_user(message.from_user.id)
-    if not u:
-        await message.answer("اول /start رو بزن تا ثبت‌نام بشی.")
+    if mew_points < COST_ADOPT:
+        await message.reply(f"برای گرفتن گربه جدید حداقل {COST_ADOPT} میوپوینت لازم داری. الان: {mew_points}")
         return
-
-    user_id = u["id"]
-    mew_points = u["mew_points"]
-    last_mew_ts = u["last_mew_ts"]
-
-    if mew_points < CAT_COST:
-        await message.answer(
-            f"برای گرفتن گربه حداقل <b>{CAT_COST}</b> میوپوینت می‌خوای.\n"
-            f"الان فقط <b>{mew_points}</b> تا داری 😿"
-        )
-        return
-
-    mew_points -= CAT_COST
-    update_user_mew(message.from_user.id, mew_points, last_mew_ts)
 
     rarity = choose_rarity()
-    element, trait, description = generate_cat_meta()
-    name = random.choice(["میشی", "پیشی", "هیسکو", "لولیتا", "موچو", "خرخری", "نِکو"])
+    element = random.choice(ELEMENTS)
+    trait = random.choice(TRAITS)
+    name = random.choice(CAT_NAMES)
+    desc = f"a {rarity} {element} cat that is {trait}"
 
-    cat_id = add_cat(user_id, name, rarity, element, trait, description)
-    cat = get_cat(cat_id, user_id)
+    new_cat_id = add_cat(
+        owner_id=user_id,
+        name=name,
+        rarity=rarity,
+        element=element,
+        trait=trait,
+        description=desc,
+    )
+
+    update_user_mew(tg_id, mew_points=mew_points - COST_ADOPT)
+
+    cat = get_cat(new_cat_id, owner_id=user_id)
+    text = "🎉 یه گربه‌ی جدید گرفتی!\n\n" + format_cat(cat)
+    await message.reply(text)
+
+
+@dp.message_handler(commands=["cat"])
+async def cmd_cat(message: types.Message):
+    tg_id = message.from_user.id
+    username = message.from_user.username
+    user_id = get_or_create_user(tg_id, username)
+
+    cat_id = parse_cat_id_from_message(message)
+    if cat_id is None:
+        await message.reply("استفاده: `/cat <id>`", parse_mode="Markdown")
+        return
+
+    cat = get_cat(cat_id, owner_id=user_id)
+    if not cat:
+        await message.reply("چنین گربه‌ای با این id و به مالکیت تو پیدا نشد.")
+        return
+
+    cat = apply_decay(cat)
+    text = format_cat(cat)
+    await message.reply(text)
+
+
+@dp.message_handler(commands=["feed"])
+async def cmd_feed(message: types.Message):
+    tg_id = message.from_user.id
+    username = message.from_user.username
+    user_id = get_or_create_user(tg_id, username)
+
+    cat_id = parse_cat_id_from_message(message)
+    if cat_id is None:
+        await message.reply("استفاده: `/feed <id>`", parse_mode="Markdown")
+        return
+
+    cat = get_cat(cat_id, owner_id=user_id)
+    if not cat:
+        await message.reply("این گربه مال تو نیست یا وجود نداره.")
+        return
+
+    cat = apply_decay(cat)
+
+    if cat.get("hunger", 0) >= 90:
+        await message.reply("این گربه الان خیلی سیره، بعداً بهش غذا بده 😸")
+        return
+
+    user_row = get_user(tg_id)
+    mew_points = user_row.get("mew_points", 0) if user_row else 0
+    if mew_points < COST_FEED:
+        await message.reply(f"برای غذا دادن {COST_FEED} میوپوینت لازم داری. الان: {mew_points}")
+        return
+
+    new_mew = mew_points - COST_FEED
+    update_user_mew(tg_id, mew_points=new_mew)
+
+    hunger = clamp(cat.get("hunger", 0) + 20)
+    happiness = clamp(cat.get("happiness", 0) + 5)
+    xp = cat.get("xp", 0)
+    level = cat.get("level", 1)
+    now = int(time.time())
+
+    update_cat_stats(cat["id"], user_id, hunger, happiness, xp, level, now)
+    cat["hunger"] = hunger
+    cat["happiness"] = happiness
+    cat["xp"] = xp
+    cat["level"] = level
+    cat["last_tick_ts"] = now
+
+    await message.reply(
+        f"به {cat['name']} غذا دادی! 😋\n"
+        f"hunger: {hunger}/100 | happiness: {happiness}/100\n"
+        f"میوپوینت باقی‌مونده: {new_mew}"
+    )
+
+
+@dp.message_handler(commands=["play"])
+async def cmd_play(message: types.Message):
+    tg_id = message.from_user.id
+    username = message.from_user.username
+    user_id = get_or_create_user(tg_id, username)
+
+    cat_id = parse_cat_id_from_message(message)
+    if cat_id is None:
+        await message.reply("استفاده: `/play <id>`", parse_mode="Markdown")
+        return
+
+    cat = get_cat(cat_id, owner_id=user_id)
+    if not cat:
+        await message.reply("این گربه مال تو نیست یا وجود نداره.")
+        return
+
+    cat = apply_decay(cat)
+
+    if cat.get("happiness", 0) >= 90:
+        await message.reply("الان خیلی خوشحاله، یه ذره استراحت بدیم 😺")
+        return
+
+    user_row = get_user(tg_id)
+    mew_points = user_row.get("mew_points", 0) if user_row else 0
+    if mew_points < COST_PLAY:
+        await message.reply(f"برای بازی کردن {COST_PLAY} میوپوینت لازم داری. الان: {mew_points}")
+        return
+
+    new_mew = mew_points - COST_PLAY
+    update_user_mew(tg_id, mew_points=new_mew)
+
+    hunger = clamp(cat.get("hunger", 0) - 5)
+    happiness = clamp(cat.get("happiness", 0) + 15)
+    xp = cat.get("xp", 0) + XP_PER_PLAY
+    level = cat.get("level", 1)
+    now = int(time.time())
+
+    update_cat_stats(cat["id"], user_id, hunger, happiness, xp, level, now)
+    cat["hunger"] = hunger
+    cat["happiness"] = happiness
+    cat["xp"] = xp
+    cat["level"] = level
+    cat["last_tick_ts"] = now
+
+    leveled, old_level, new_level = apply_levelup(cat)
 
     text = (
-        f"🎉 <b>یه گربهٔ جدید گرفتی!</b>\n\n"
-        f"{format_cat(cat)}\n\n"
-        f"میوپوینت باقی‌مونده: <b>{mew_points}</b>"
+        f"با {cat['name']} بازی کردی! 🎾\n"
+        f"hunger: {hunger}/100 | happiness: {happiness}/100 | xp: {cat['xp']}\n"
+        f"میوپوینت باقی‌مونده: {new_mew}"
     )
+    if leveled:
+        text += f"\n\n🎉 {cat['name']} از lvl {old_level} رفت lvl {new_level}!"
 
-    await message.answer(
-        text,
-        reply_markup=(main_kb if message.chat.type == "private" else None),
-    )
+    await message.reply(text)
 
 
-@dp.message_handler(commands=["cats"])
-async def cmd_cats(message: types.Message):
-    ensure_user_and_group(message)
+@dp.message_handler(commands=["train"])
+async def cmd_train(message: types.Message):
+    tg_id = message.from_user.id
+    username = message.from_user.username
+    user_id = get_or_create_user(tg_id, username)
 
-    u = get_user(message.from_user.id)
-    if not u:
-        await message.answer("اول /start رو بزن تا ثبت‌نام بشی.")
+    cat_id = parse_cat_id_from_message(message)
+    if cat_id is None:
+        await message.reply("استفاده: `/train <id>`", parse_mode="Markdown")
         return
 
-    user_id = u["id"]
-    cats = get_user_cats(user_id)
-
-    if not cats:
-        await message.answer(
-            "هنوز هیچ گربه‌ای نداری 😿\n"
-            "با «✨ گرفتن گربه» یکی بیار خونه‌ت."
-        )
+    cat = get_cat(cat_id, owner_id=user_id)
+    if not cat:
+        await message.reply("این گربه مال تو نیست یا وجود نداره.")
         return
 
-    lines = []
-    for cat in cats[:20]:
-        power = cat_power(cat)
-        lines.append(
-            f"ID <code>{cat['id']}</code> — 🐱 <b>{cat['name']}</b> "
-            f"({cat['rarity']}, {ELEMENT_FA.get(cat['element'], cat['element'])}) "
-            f"| Lv.{cat['level']} | Power: {power}"
-        )
+    cat = apply_decay(cat)
 
-    text = "🐾 گربه‌های تو:\n\n" + "\n".join(lines)
-    text += "\n\nبرای دیدن جزئیات یک گربه، /cat_ID رو بفرست (مثلاً /cat_1)"
+    user_row = get_user(tg_id)
+    mew_points = user_row.get("mew_points", 0) if user_row else 0
+    if mew_points < COST_TRAIN:
+        await message.reply(f"برای تمرین {COST_TRAIN} میوپوینت لازم داری. الان: {mew_points}")
+        return
 
-    await message.answer(text)
+    new_mew = mew_points - COST_TRAIN
+    update_user_mew(tg_id, mew_points=new_mew)
+
+    hunger = clamp(cat.get("hunger", 0) - 10)
+    happiness = clamp(cat.get("happiness", 0) + 5)
+    xp = cat.get("xp", 0) + XP_PER_TRAIN
+    level = cat.get("level", 1)
+    now = int(time.time())
+
+    update_cat_stats(cat["id"], user_id, hunger, happiness, xp, level, now)
+    cat["hunger"] = hunger
+    cat["happiness"] = happiness
+    cat["xp"] = xp
+    cat["level"] = level
+    cat["last_tick_ts"] = now
+
+    leveled, old_level, new_level = apply_levelup(cat)
+
+    text = (
+        f"{cat['name']} رو تمرین دادی! 💪\n"
+        f"hunger: {hunger}/100 | happiness: {happiness}/100 | xp: {cat['xp']}\n"
+        f"میوپوینت باقی‌مونده: {new_mew}"
+    )
+    if leveled:
+        text += f"\n\n🎉 {cat['name']} از lvl {old_level} رفت lvl {new_level}!"
+
+    await message.reply(text)
 
 
-@dp.message_handler(lambda m: m.text and m.text.startswith("/cat_"))
-async def handle_cat_command(message: types.Message):
-    ensure_user_and_group(message)
+@dp.message_handler(commands=["rename"])
+async def cmd_rename(message: types.Message):
+    tg_id = message.from_user.id
+    username = message.from_user.username
+    user_id = get_or_create_user(tg_id, username)
+
+    parts = message.text.strip().split(maxsplit=2)
+    if len(parts) < 3:
+        await message.reply("استفاده: `/rename <id> <name>`", parse_mode="Markdown")
+        return
 
     try:
-        cat_id = int(message.text.split("_", 1)[1])
-    except Exception:
-        await message.answer("فرمت درست: /cat_<id> مثلاً /cat_1")
+        cat_id = int(parts[1])
+    except ValueError:
+        await message.reply("id گربه باید عدد باشد.")
         return
 
-    u = get_user(message.from_user.id)
-    if not u:
-        await message.answer("اول /start رو بزن تا ثبت‌نام بشی.")
+    new_name = parts[2].strip()
+    if not new_name or len(new_name) > 32:
+        await message.reply("اسم جدید باید ۱ تا ۳۲ کاراکتر باشد.")
         return
 
-    user_id = u["id"]
-    cat = get_cat(cat_id, user_id)
+    cat = get_cat(cat_id, owner_id=user_id)
     if not cat:
-        await message.answer("چنین گربه‌ای برای تو پیدا نشد 😿")
+        await message.reply("این گربه مال تو نیست یا وجود ندارد.")
         return
 
-    cat, extra, new_user = process_cat_ticks(cat, u)
-
-    msg = format_cat(cat)
-    if extra:
-        msg += "\n\n" + extra
-
-    await message.answer(msg, reply_markup=cat_inline_kb(cat_id))
+    rename_cat(user_id, cat_id, new_name)
+    await message.reply(f"اسم گربه #{cat_id} شد: {new_name}")
 
 
-@dp.callback_query_handler(lambda c: c.data and c.data.startswith("feed:"))
-async def handle_feed_cat(callback_query: types.CallbackQuery):
-    cat_id = int(callback_query.data.split(":")[1])
-
-    u = get_user(callback_query.from_user.id)
-    if not u:
-        await callback_query.answer("اول /start رو بزن.", show_alert=True)
+@dp.message_handler(commands=["gift"])
+async def cmd_gift(message: types.Message):
+    """
+    استفاده: جواب بده روی پیام طرف و بنویس:
+    /gift <cat_id>
+    """
+    if not message.reply_to_message:
+        await message.reply("برای هدیه دادن، باید این دستور را روی پیام کسی ریپلای کنی.")
         return
 
-    user_id = u["id"]
-    mew_points = u["mew_points"]
-    last_mew_ts = u["last_mew_ts"]
+    target = message.reply_to_message.from_user
+    target_tg_id = target.id
+    target_username = target.username
 
-    cat = get_cat(cat_id, user_id)
+    tg_id = message.from_user.id
+    username = message.from_user.username
+
+    from_user_id = get_or_create_user(tg_id, username)
+    to_user_id = get_or_create_user(target_tg_id, target_username)
+
+    parts = message.text.strip().split()
+    if len(parts) < 2:
+        await message.reply("استفاده: `/gift <cat_id>` به‌عنوان ریپلای روی پیام طرف.", parse_mode="Markdown")
+        return
+
+    try:
+        cat_id = int(parts[1])
+    except ValueError:
+        await message.reply("id گربه باید عدد باشد.")
+        return
+
+    cat = get_cat(cat_id, owner_id=from_user_id)
     if not cat:
-        await callback_query.answer("این گربه مال تو نیست!", show_alert=True)
+        await message.reply("این گربه مال تو نیست یا وجود ندارد.")
         return
 
-    cat, extra, u_after_ticks = process_cat_ticks(cat, u)
-    mew_points = u_after_ticks["mew_points"]
-    last_mew_ts = u_after_ticks["last_mew_ts"]
-
-    if mew_points < 5:
-        await callback_query.answer("میوپوینتت برای غذا دادن کمه (حداقل ۵).", show_alert=True)
-        return
-
-    mew_points -= 5
-
-    level = cat["level"]
-    hunger = cat["hunger"]
-    happiness = cat["happiness"]
-    xp = cat["xp"]
-
-    max_h = max_hunger_for_level(level)
-    max_hp = max_happiness_for_level(level)
-
-    hunger = min(max_h, hunger + 20)
-    happiness = min(max_hp, happiness + 10)
-    xp += 5
-
-    while xp >= xp_needed_for_next_level(level):
-        xp -= xp_needed_for_next_level(level)
-        level += 1
-        max_h = max_hunger_for_level(level)
-        max_hp = max_happiness_for_level(level)
-
-    update_user_mew(callback_query.from_user.id, mew_points, last_mew_ts)
-    update_cat_stats(cat_id, user_id, hunger, happiness, xp, level, int(time.time()))
-
-    updated_cat = get_cat(cat_id, user_id)
-
-    text = format_cat(updated_cat)
-    if extra:
-        text += "\n\n" + extra
-
-    await callback_query.message.edit_text(
-        text,
-        reply_markup=cat_inline_kb(cat_id),
+    set_cat_owner(cat_id, to_user_id)
+    await message.reply(
+        f"🎁 گربه {cat['name']} (#{cat_id}) رو به {target.first_name} هدیه دادی!"
     )
-    await callback_query.answer("🍗 گربه‌ت غذا خورد و خوشحال‌تر شد!")
 
 
-@dp.message_handler(commands=["top"])
-async def cmd_top(message: types.Message):
+@dp.message_handler(commands=["leaderboard"])
+async def cmd_leaderboard(message: types.Message):
+    if message.chat.type in ("group", "supergroup"):
+        users = get_group_users(message.chat.id)
+        title = "🏆 لیدربورد این گروه:"
+    else:
+        users = get_all_users()
+        title = "🏆 لیدربورد کلی مِولَند:"
+
+    if not users:
+        await message.reply("هنوز هیچ بازیکنی ثبت نشده!")
+        return
+
+    users_sorted = sorted(
+        users,
+        key=lambda u: u.get("mew_points", 0),
+        reverse=True,
+    )[:10]
+
+    lines = []
+    for i, u in enumerate(users_sorted, start=1):
+        uname = u.get("username") or f"user_{u['telegram_id']}"
+        if not uname.startswith("@"):
+            uname = f"@{uname}"
+        mp = u.get("mew_points", 0)
+        lines.append(f"{i}. {uname} – {mp} میوپوینت")
+
+    text = title + "\n" + "\n".join(lines)
+    await message.reply(text)
+
+
+# ---------- هندلر mew ----------
+
+@dp.message_handler(regexp=r"^(?i)mew$")
+async def handle_mew(message: types.Message):
     if message.chat.type not in ("group", "supergroup"):
-        await message.answer("این کامند برای لیدربورد گروه است، توی یک گروه امتحانش کن 😺")
+        await message.reply("برای گرفتن میوپوینت، منو توی یک گروه اضافه کن 😼")
         return
 
-    ensure_user_and_group(message)
+    tg_id = message.from_user.id
+    username = message.from_user.username
+    user_id = get_or_create_user(tg_id, username)
+    register_user_group(user_id, message.chat.id)
 
-    chat_id = message.chat.id
-    users = get_group_users(chat_id)
+    user_row = get_user(tg_id)
+    now = int(time.time())
+    last = user_row.get("last_mew_ts") if user_row else None
 
-    if not users:
-        await message.answer("تو این گروه هنوز کسی ثبت نشده 😿\nاول چند نفر /start بزنن یا میو کنن.")
-        return
+    if last is not None:
+        delta = now - last
+        if delta < MEW_COOLDOWN_SEC:
+            remain = MEW_COOLDOWN_SEC - delta
+            mins = remain // 60
+            secs = remain % 60
+            await message.reply(f"هنوز باید {mins} دقیقه و {secs} ثانیه صبر کنی تا دوباره میو بزنی 😼")
+            return
 
-    scores = []
-    for u in users:
-        cats = get_user_cats(u["id"])
-        total_power = sum(cat_power(c) for c in cats)
-        scores.append((u, total_power))
+    mew_points = user_row.get("mew_points", 0) if user_row else 0
+    gain = random.randint(3, 7)
+    new_total = mew_points + gain
 
-    scores = [s for s in scores if s[1] > 0]
-    scores.sort(key=lambda x: x[1], reverse=True)
+    update_user_mew(tg_id, mew_points=new_total, last_mew_ts=now)
 
-    if not scores:
-        await message.answer("کسی هنوز گربه‌ای نگرفته که قدرتی داشته باشه 😼")
-        return
-
-    lines = []
-    for idx, (u, power) in enumerate(scores[:10], start=1):
-        username = u["username"] or u["telegram_id"]
-        lines.append(f"{idx}. <b>{username}</b> — Cat Power: <b>{power}</b>")
-
-    text = "🏆 لیدربورد این گروه (بر اساس قدرت گربه‌ها):\n\n" + "\n".join(lines)
-    await message.answer(text)
-
-
-@dp.message_handler(commands=["top_global"])
-async def cmd_top_global(message: types.Message):
-    users = get_all_users()
-    if not users:
-        await message.answer("هنوز هیچ یوزری ثبت نشده 😿")
-        return
-
-    scores = []
-    for u in users:
-        cats = get_user_cats(u["id"])
-        total_power = sum(cat_power(c) for c in cats)
-        scores.append((u, total_power))
-
-    scores = [s for s in scores if s[1] > 0]
-    scores.sort(key=lambda x: x[1], reverse=True)
-
-    if not scores:
-        await message.answer("هنوز هیچ گربه‌ای در جهان میولند احضار نشده 😼")
-        return
-
-    lines = []
-    for idx, (u, power) in enumerate(scores[:10], start=1):
-        username = u["username"] or u["telegram_id"]
-        lines.append(f"{idx}. <b>{username}</b> — Cat Power: <b>{power}</b>")
-
-    text = "🌍 لیدربورد جهانی میولند:\n\n" + "\n".join(lines)
-    await message.answer(text)
-
-
-# ---------------- lifecycle وب‌هوک ----------------
-async def on_startup(dp):
-    logging.info("Init DB...")
-    init_db()
-    logging.info(f"Setting webhook to {WEBHOOK_URL}")
-    await bot.set_webhook(WEBHOOK_URL)
-
-
-async def on_shutdown(dp):
-    logging.info("Deleting webhook...")
-    await bot.delete_webhook()
-
-
-# ---------------- اجرای اصلی ----------------
-if __name__ == "__main__":
-    start_webhook(
-        dispatcher=dp,
-        webhook_path=WEBHOOK_PATH,
-        on_startup=on_startup,
-        on_shutdown=on_shutdown,
-        host=WEBAPP_HOST,
-        port=WEBAPP_PORT,
+    await message.reply(
+        f"+{gain} میوپوینت! 🎉\n"
+        f"مجموع میوپوینت‌هات: {new_total}"
     )
+
+
+# ---------- Webhook / سرور ----------
+
+async def handle_webhook(request: web.Request):
+    data = await request.json()
+    update = types.Update.to_object(data)
+    await dp.process_update(update)
+    return web.Response(text="ok")
+
+
+async def index(request: web.Request):
+    return web.Response(text="Mewland bot is running.")
+
+
+async def on_startup(app: web.Application):
+    init_db()
+    await bot.set_webhook(WEBHOOK_URL)
+    logging.info(f"Webhook set to {WEBHOOK_URL}")
+
+
+async def on_shutdown(app: web.Application):
+    await bot.delete_webhook()
+    logging.info("Webhook deleted")
+
+
+def main():
+    app = web.Application()
+    app.router.add_get("/", index)
+    app.router.add_post(WEBHOOK_PATH, handle_webhook)
+    app.on_startup.append(on_startup)
+    app.on_shutdown.append(on_shutdown)
+
+    web.run_app(app, host=APP_HOST, port=APP_PORT)
+
+
+if __name__ == "__main__":
+    main()
