@@ -638,18 +638,16 @@ async def handle_mew(message: types.Message):
 # ---------- Webhook / سرور ----------
 
 async def handle_webhook(request):
-    if request.match_info.get("token") != BOT_TOKEN:8479244611:AAGHy5qix5B6BW2XKj65QY5-TlphnGZRHJ8
-        return web.Response(status=403)
-
     data = await request.json()
     update = types.Update(**data)
 
-    # این دو خط مهم‌ان 👇
+    # ensure bot and dispatcher context is set
     Bot.set_current(bot)
     Dispatcher.set_current(dp)
 
     await dp.process_update(update)
     return web.Response()
+
 
 
 
