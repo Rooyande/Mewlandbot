@@ -12,7 +12,7 @@ from aiogram.types import (
     InlineKeyboardMarkup,
     InlineKeyboardButton,
 )
-from aiogram.utils import executor
+from aiogram.utils.executor import start_webhook  # مهم: وب‌هوک
 
 from db import (
     init_db,
@@ -30,15 +30,28 @@ from db import (
 
 # ---------------- تنظیمات اصلی ----------------
 BOT_TOKEN = os.getenv("BOT_TOKEN")  # از Render ست می‌کنی
-
 if not BOT_TOKEN:
     raise RuntimeError("BOT_TOKEN env var is not set")
+
+# تنظیمات وب‌هوک / وب‌سرور برای Render
+WEBAPP_HOST = "0.0.0.0"
+WEBAPP_PORT = int(os.getenv("PORT", 8000))  # Render خودش PORT رو می‌ذاره
+
+# Render معمولاً متغیر RENDER_EXTERNAL_URL رو می‌ذاره، مثل:
+# https://your-service.onrender.com
+BASE_URL = os.getenv("WEBHOOK_BASE_URL") or os.getenv("RENDER_EXTERNAL_URL")
+if not BASE_URL:
+    # اگر برای هر دلیلی ست نشده بود، خودت می‌تونی WEBHOOK_BASE_URL رو دستی تو Render بذاری
+    raise RuntimeError("RENDER_EXTERNAL_URL or WEBHOOK_BASE_URL env var is not set")
+
+WEBHOOK_PATH = f"/webhook/{BOT_TOKEN}"
+WEBHOOK_URL = BASE_URL.rstrip("/") + WEBHOOK_PATH
 
 MEW_COOLDOWN_SECONDS = 7 * 60   # کول‌داون میو
 MEW_REWARD = 10                 # امتیاز هر میو
 CAT_COST = 100                  # هزینه‌ی گرفتن گربه
 
-TICK_HOURS = 3                  # هر ۳ ساعت یک تیک
+TICK_HOURS = 3
 TICK_SECONDS = TICK_HOURS * 3600
 
 # rarity و احتمال
@@ -113,7 +126,6 @@ FEARS = [
     "درِ بستهٔ یخچال",
 ]
 
-# eventهای تیک ۳ ساعته
 TICK_EVENTS = [
     {
         "text": "یک موش شکار کرد و کلی ذوق کرد! (+۵ XP، +۵ شادی، -۲ گرسنگی)",
@@ -237,14 +249,10 @@ def format_cat(cat_row):
 def cat_inline_kb(cat_id):
     kb = InlineKeyboardMarkup()
     kb.add(InlineKeyboardButton("🍗 غذا دادن", callback_data=f"feed:{cat_id}"))
-    # بعداً می‌تونی اینا رو اضافه کنی:
-    # kb.add(InlineKeyboardButton("🎲 بازی", callback_data=f"play:{cat_id}"))
-    # kb.add(InlineKeyboardButton("🧳 کار", callback_data=f"job:{cat_id}"))
     return kb
 
 
 def ensure_user_and_group(message: types.Message):
-    """ثبت یوزر و اگر گروه بود، ثبت گروه برای لیدربورد"""
     user_telegram_id = message.from_user.id
     username = message.from_user.username
     user_id = get_or_create_user(user_telegram_id, username)
@@ -256,10 +264,6 @@ def ensure_user_and_group(message: types.Message):
 
 
 def process_cat_ticks(cat_row, user_row):
-    """
-    شبیه‌سازی تیک‌های ۳ ساعته برای یک گربه، وقتی یوزر برمی‌گرده و گربه رو نگاه می‌کنه.
-    هم استت گربه آپدیت می‌شه، هم ممکنه XP و غیره عوض بشه.
-    """
     now = int(time.time())
     last_tick = cat_row["last_tick_ts"] or cat_row["created_at"]
 
@@ -267,7 +271,7 @@ def process_cat_ticks(cat_row, user_row):
     ticks = delta // TICK_SECONDS
 
     if ticks <= 0:
-        return cat_row, "", user_row  # هیچ اتفاقی
+        return cat_row, "", user_row
 
     hunger = cat_row["hunger"]
     happiness = cat_row["happiness"]
@@ -280,11 +284,9 @@ def process_cat_ticks(cat_row, user_row):
     events_text = []
 
     for _ in range(int(ticks)):
-        # افت طبیعی
         hunger -= 5
         happiness -= 3
 
-        # event تصادفی با احتمال ۴۰٪
         if random.random() < 0.4:
             ev = random.choice(TICK_EVENTS)
             xp += ev["dxp"]
@@ -293,12 +295,10 @@ def process_cat_ticks(cat_row, user_row):
             mew_points += ev["dmew"]
             events_text.append(ev["text"])
 
-        # لول‌آپ در صورت نیاز
         while xp >= xp_needed_for_next_level(level):
             xp -= xp_needed_for_next_level(level)
             level += 1
 
-        # محدود کردن استت‌ها
         max_h = max_hunger_for_level(level)
         max_hp = max_happiness_for_level(level)
 
@@ -306,11 +306,9 @@ def process_cat_ticks(cat_row, user_row):
         happiness = max(0, min(max_hp, happiness))
         xp = max(0, xp)
 
-    # ذخیره در دیتابیس
     update_user_mew(user_row["telegram_id"], mew_points, last_mew_ts)
     update_cat_stats(cat_row["id"], cat_row["owner_id"], hunger, happiness, xp, level, now)
 
-    # دوباره از دیتابیس بخونیم تا مقدار نهایی دقیق باشد
     new_user = get_user(user_row["telegram_id"])
     new_cat = get_cat(cat_row["id"], cat_row["owner_id"])
 
@@ -492,7 +490,6 @@ async def handle_cat_command(message: types.Message):
         await message.answer("چنین گربه‌ای برای تو پیدا نشد 😿")
         return
 
-    # شبیه‌سازی تیک‌های ۳ ساعته قبل از نمایش
     cat, extra, new_user = process_cat_ticks(cat, u)
 
     msg = format_cat(cat)
@@ -520,7 +517,6 @@ async def handle_feed_cat(callback_query: types.CallbackQuery):
         await callback_query.answer("این گربه مال تو نیست!", show_alert=True)
         return
 
-    # قبل از غذا دادن، تیک‌های ۳ ساعته را اعمال کن
     cat, extra, u_after_ticks = process_cat_ticks(cat, u)
     mew_points = u_after_ticks["mew_points"]
     last_mew_ts = u_after_ticks["last_mew_ts"]
@@ -543,7 +539,6 @@ async def handle_feed_cat(callback_query: types.CallbackQuery):
     happiness = min(max_hp, happiness + 10)
     xp += 5
 
-    # لِوِل‌آپ
     while xp >= xp_needed_for_next_level(level):
         xp -= xp_needed_for_next_level(level)
         level += 1
@@ -632,7 +627,26 @@ async def cmd_top_global(message: types.Message):
     await message.answer(text)
 
 
+# ---------------- lifecycle وب‌هوک ----------------
+async def on_startup(dp):
+    logging.info("Init DB...")
+    init_db()
+    logging.info(f"Setting webhook to {WEBHOOK_URL}")
+    await bot.set_webhook(WEBHOOK_URL)
+
+
+async def on_shutdown(dp):
+    logging.info("Deleting webhook...")
+    await bot.delete_webhook()
+
+
 # ---------------- اجرای اصلی ----------------
 if __name__ == "__main__":
-    init_db()
-    executor.start_polling(dp, skip_updates=True)
+    start_webhook(
+        dispatcher=dp,
+        webhook_path=WEBHOOK_PATH,
+        on_startup=on_startup,
+        on_shutdown=on_shutdown,
+        host=WEBAPP_HOST,
+        port=WEBAPP_PORT,
+    )
