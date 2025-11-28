@@ -1,189 +1,187 @@
 # db.py
+# استفاده از Supabase REST API به‌جای اتصال مستقیم Postgres
+
 import os
-import time
-import psycopg2
-from psycopg2.extras import DictCursor
+import requests
 
-DATABASE_URL = os.getenv("DATABASE_URL")
+SUPABASE_URL = os.getenv("SUPABASE_URL")
+SUPABASE_KEY = os.getenv("SUPABASE_KEY")
 
-if not DATABASE_URL:
-    raise RuntimeError("DATABASE_URL env var is not set")
+if not SUPABASE_URL or not SUPABASE_KEY:
+    raise RuntimeError("SUPABASE_URL یا SUPABASE_KEY تنظیم نشده است.")
 
-# اتصال به دیتابیس Supabase Postgres
-conn = psycopg2.connect(DATABASE_URL, cursor_factory=DictCursor)
-conn.autocommit = True  # برای MVP ساده
+BASE_REST = SUPABASE_URL.rstrip("/") + "/rest/v1"
+
+BASE_HEADERS = {
+    "apikey": SUPABASE_KEY,
+    "Authorization": f"Bearer {SUPABASE_KEY}",
+    "Content-Type": "application/json",
+    "Accept": "application/json",
+}
 
 
+def _get(table, params):
+    p = dict(params)
+    if "select" not in p:
+        p["select"] = "*"
+    r = requests.get(f"{BASE_REST}/{table}", headers=BASE_HEADERS, params=p, timeout=10)
+    r.raise_for_status()
+    return r.json()
+
+
+def _insert(table, data):
+    headers = dict(BASE_HEADERS)
+    headers["Prefer"] = "return=representation"
+    r = requests.post(
+        f"{BASE_REST}/{table}",
+        headers=headers,
+        json=data,
+        timeout=10,
+    )
+    r.raise_for_status()
+    rows = r.json()
+    return rows[0] if rows else None
+
+
+def _update(table, filters, data):
+    headers = dict(BASE_HEADERS)
+    headers["Prefer"] = "return=representation"
+    params = dict(filters)
+    params["select"] = "*"
+    r = requests.patch(
+        f"{BASE_REST}/{table}",
+        headers=headers,
+        params=params,
+        json=data,
+        timeout=10,
+    )
+    r.raise_for_status()
+    rows = r.json()
+    return rows[0] if rows else None
+
+
+# ---------- init_db (اینجا کاری خاص نمی‌کنیم) ----------
 def init_db():
-    """ساخت جدول‌ها اگر وجود نداشته باشن"""
-    with conn.cursor() as cur:
-        cur.execute("""
-        create table if not exists users (
-            id serial primary key,
-            telegram_id bigint unique not null,
-            username text,
-            mew_points integer default 0,
-            last_mew_ts bigint
-        );
-        """)
-
-        cur.execute("""
-        create table if not exists cats (
-            id serial primary key,
-            owner_id integer references users(id) on delete cascade,
-            name text not null,
-            rarity text not null,
-            element text,
-            trait text,
-            description text,
-            level integer default 1,
-            xp integer default 0,
-            hunger integer default 50,
-            happiness integer default 50,
-            created_at bigint,
-            last_tick_ts bigint
-        );
-        """)
-
-        cur.execute("""
-        create table if not exists user_groups (
-            id serial primary key,
-            user_id integer references users(id) on delete cascade,
-            chat_id bigint not null
-        );
-        """)
-
-        # یونیک بودن ترکیب user + chat برای تکراری نشدن
-        cur.execute("""
-        do $$
-        begin
-            if not exists (
-                select 1 from pg_indexes
-                where schemaname = 'public'
-                  and indexname = 'user_groups_user_chat_idx'
-            ) then
-                create unique index user_groups_user_chat_idx
-                on user_groups(user_id, chat_id);
-            end if;
-        end
-        $$;
-        """)
+    # برای Postgres مستقیم نیاز بود، اینجا فقط می‌تونست چک سلامت بکند.
+    return
 
 
-def get_or_create_user(telegram_id, username):
-    with conn.cursor() as cur:
-        cur.execute(
-            "select id, mew_points, last_mew_ts from users where telegram_id = %s;",
-            (telegram_id,),
-        )
-        row = cur.fetchone()
-        if row:
-            return row["id"]
-
-        cur.execute(
-            "insert into users(telegram_id, username, mew_points, last_mew_ts) "
-            "values(%s,%s,0,null) returning id;",
-            (telegram_id, username),
-        )
-        user_id = cur.fetchone()["id"]
-        return user_id
+# ---------- USERS ----------
+def get_user(telegram_id: int):
+    rows = _get("users", {"telegram_id": f"eq.{telegram_id}"})
+    return rows[0] if rows else None
 
 
-def get_user(telegram_id):
-    with conn.cursor() as cur:
-        cur.execute(
-            "select id, telegram_id, username, mew_points, last_mew_ts "
-            "from users where telegram_id = %s;",
-            (telegram_id,),
-        )
-        return cur.fetchone()
+def get_or_create_user(telegram_id: int, username: str | None):
+    u = get_user(telegram_id)
+    if u:
+        return u["id"]
+
+    data = {
+        "telegram_id": telegram_id,
+        "username": username,
+        "mew_points": 0,
+        "last_mew_ts": None,
+    }
+    row = _insert("users", data)
+    return row["id"]
 
 
-def update_user_mew(telegram_id, mew_points, last_mew_ts):
-    with conn.cursor() as cur:
-        cur.execute(
-            "update users set mew_points = %s, last_mew_ts = %s "
-            "where telegram_id = %s;",
-            (mew_points, last_mew_ts, telegram_id),
-        )
-
-
-def register_user_group(user_id, chat_id):
-    """ثبت این که این یوزر تو این گروه فعّال بوده (برای لیدربورد گروهی)"""
-    with conn.cursor() as cur:
-        cur.execute("""
-            insert into user_groups(user_id, chat_id)
-            values (%s, %s)
-            on conflict (user_id, chat_id) do nothing;
-        """, (user_id, chat_id))
-
-
-def get_group_users(chat_id):
-    """لیست یوزرهای این گروه با mew_points"""
-    with conn.cursor() as cur:
-        cur.execute("""
-            select u.id, u.telegram_id, u.username, u.mew_points
-            from users u
-            join user_groups g on g.user_id = u.id
-            where g.chat_id = %s;
-        """, (chat_id,))
-        return cur.fetchall()
+def update_user_mew(telegram_id: int, mew_points: int, last_mew_ts: int | None):
+    data = {
+        "mew_points": mew_points,
+        "last_mew_ts": last_mew_ts,
+    }
+    _update("users", {"telegram_id": f"eq.{telegram_id}"}, data)
 
 
 def get_all_users():
-    with conn.cursor() as cur:
-        cur.execute("""
-            select id, telegram_id, username, mew_points
-            from users;
-        """)
-        return cur.fetchall()
+    return _get("users", {})
 
 
-def get_user_cats(user_id):
-    with conn.cursor() as cur:
-        cur.execute("""
-            select id, owner_id, name, rarity, element, trait, description,
-                   level, xp, hunger, happiness, created_at, last_tick_ts
-            from cats
-            where owner_id = %s
-            order by id desc;
-        """, (user_id,))
-        return cur.fetchall()
+# ---------- USER_GROUPS ----------
+def register_user_group(user_id: int, chat_id: int):
+    # اول چک می‌کنیم وجود داره یا نه
+    rows = _get(
+        "user_groups",
+        {
+            "user_id": f"eq.{user_id}",
+            "chat_id": f"eq.{chat_id}",
+        },
+    )
+    if rows:
+        return
+
+    data = {
+        "user_id": user_id,
+        "chat_id": chat_id,
+    }
+    _insert("user_groups", data)
 
 
-def add_cat(owner_id, name, rarity, element, trait, description):
+def get_group_users(chat_id: int):
+    # user_groups رو می‌گیریم بعد یوزرها رو جدا جدا
+    ugs = _get("user_groups", {"chat_id": f"eq.{chat_id}"})
+    users = []
+    for ug in ugs:
+        uid = ug["user_id"]
+        rows = _get("users", {"id": f"eq.{uid}"})
+        if rows:
+            users.append(rows[0])
+    return users
+
+
+# ---------- CATS ----------
+def get_user_cats(user_id: int):
+    return _get("cats", {"owner_id": f"eq.{user_id}"})
+
+
+def add_cat(owner_id: int, name: str, rarity: str, element: str, trait: str, description: str) -> int:
+    import time
+
     now = int(time.time())
-    with conn.cursor() as cur:
-        cur.execute("""
-            insert into cats(owner_id, name, rarity, element, trait, description,
-                             level, xp, hunger, happiness, created_at, last_tick_ts)
-            values(%s,%s,%s,%s,%s,%s,
-                   1, 0, 60, 60, %s, %s)
-            returning id;
-        """, (owner_id, name, rarity, element, trait, description, now, now))
-        row = cur.fetchone()
-        return row["id"]
+    data = {
+        "owner_id": owner_id,
+        "name": name,
+        "rarity": rarity,
+        "element": element,
+        "trait": trait,
+        "description": description,
+        "level": 1,
+        "xp": 0,
+        "hunger": 50,
+        "happiness": 50,
+        "created_at": now,
+        "last_tick_ts": now,
+    }
+    row = _insert("cats", data)
+    return row["id"]
 
 
-def get_cat(cat_id, owner_id):
-    with conn.cursor() as cur:
-        cur.execute("""
-            select id, owner_id, name, rarity, element, trait, description,
-                   level, xp, hunger, happiness, created_at, last_tick_ts
-            from cats
-            where id = %s and owner_id = %s;
-        """, (cat_id, owner_id))
-        return cur.fetchone()
+def get_cat(cat_id: int, owner_id: int):
+    rows = _get(
+        "cats",
+        {
+            "id": f"eq.{cat_id}",
+            "owner_id": f"eq.{owner_id}",
+        },
+    )
+    return rows[0] if rows else None
 
 
-def update_cat_stats(cat_id, owner_id, hunger, happiness, xp, level, last_tick_ts):
-    with conn.cursor() as cur:
-        cur.execute("""
-            update cats
-            set hunger = %s,
-                happiness = %s,
-                xp = %s,
-                level = %s,
-                last_tick_ts = %s
-            where id = %s and owner_id = %s;
-        """, (hunger, happiness, xp, level, last_tick_ts, cat_id, owner_id))
+def update_cat_stats(cat_id: int, owner_id: int, hunger: int, happiness: int, xp: int, level: int, last_tick_ts: int):
+    data = {
+        "hunger": hunger,
+        "happiness": happiness,
+        "xp": xp,
+        "level": level,
+        "last_tick_ts": last_tick_ts,
+    }
+    _update(
+        "cats",
+        {
+            "id": f"eq.{cat_id}",
+            "owner_id": f"eq.{owner_id}",
+        },
+        data,
+    )
