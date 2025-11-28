@@ -229,3 +229,17 @@ def set_cat_owner(cat_id: int, new_owner_id: int):
         {"id": f"eq.{cat_id}"},
         {"owner_id": new_owner_id},
     )
+
+def get_leaderboard(limit: int = 10):
+    """
+    برمی‌گردونه top N یوزر بر اساس mew_points
+    """
+    res = supabase.table("users") \
+        .select("telegram_id, username, mew_points") \
+        .order("mew_points", desc=True) \
+        .limit(limit) \
+        .execute()
+
+    data = res.data or []
+    return data
+
