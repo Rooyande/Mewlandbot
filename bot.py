@@ -599,7 +599,7 @@ async def cmd_leaderboard(message: types.Message):
 
 # ---------- هندلر mew ----------
 
-@dp.message_handler(regexp=r"^(?i)mew$")
+@dp.message_handler(regexp=r"^mew$")
 async def handle_mew(message: types.Message):
     if message.chat.type not in ("group", "supergroup"):
         await message.reply("برای گرفتن میوپوینت، منو توی یک گروه اضافه کن 😼")
