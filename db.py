@@ -1,8 +1,10 @@
 # db.py
-# استفاده از Supabase REST API به‌جای اتصال مستقیم Postgres
+# اتصال به Supabase با REST API (نه Postgres مستقیم)
 
 import os
+import time
 import requests
+
 
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY")
@@ -20,16 +22,23 @@ BASE_HEADERS = {
 }
 
 
-def _get(table, params):
-    p = dict(params)
+# ---------- Helperهای پایه ----------
+
+def _get(table: str, params: dict):
+    p = dict(params or {})
     if "select" not in p:
         p["select"] = "*"
-    r = requests.get(f"{BASE_REST}/{table}", headers=BASE_HEADERS, params=p, timeout=10)
+    r = requests.get(
+        f"{BASE_REST}/{table}",
+        headers=BASE_HEADERS,
+        params=p,
+        timeout=10,
+    )
     r.raise_for_status()
     return r.json()
 
 
-def _insert(table, data):
+def _insert(table: str, data: dict):
     headers = dict(BASE_HEADERS)
     headers["Prefer"] = "return=representation"
     r = requests.post(
@@ -43,10 +52,12 @@ def _insert(table, data):
     return rows[0] if rows else None
 
 
-def _update(table, filters, data):
+def _update(table: str, filters: dict, data: dict):
+    if not data:
+        return None
     headers = dict(BASE_HEADERS)
     headers["Prefer"] = "return=representation"
-    params = dict(filters)
+    params = dict(filters or {})
     params["select"] = "*"
     r = requests.patch(
         f"{BASE_REST}/{table}",
@@ -60,13 +71,13 @@ def _update(table, filters, data):
     return rows[0] if rows else None
 
 
-# ---------- init_db (اینجا کاری خاص نمی‌کنیم) ----------
 def init_db():
-    # برای Postgres مستقیم نیاز بود، اینجا فقط می‌تونست چک سلامت بکند.
+    # اینجا می‌تونست چک سلامت سوپابیس باشه، فعلاً لازم نیست
     return
 
 
 # ---------- USERS ----------
+
 def get_user(telegram_id: int):
     rows = _get("users", {"telegram_id": f"eq.{telegram_id}"})
     return rows[0] if rows else None
@@ -77,21 +88,26 @@ def get_or_create_user(telegram_id: int, username: str | None):
     if u:
         return u["id"]
 
+    now = int(time.time())
     data = {
         "telegram_id": telegram_id,
         "username": username,
         "mew_points": 0,
         "last_mew_ts": None,
+        "created_at": now,
     }
     row = _insert("users", data)
     return row["id"]
 
 
-def update_user_mew(telegram_id: int, mew_points: int, last_mew_ts: int | None):
-    data = {
-        "mew_points": mew_points,
-        "last_mew_ts": last_mew_ts,
-    }
+def update_user_mew(telegram_id: int, mew_points=None, last_mew_ts=None):
+    data = {}
+    if mew_points is not None:
+        data["mew_points"] = mew_points
+    if last_mew_ts is not None:
+        data["last_mew_ts"] = last_mew_ts
+    if not data:
+        return
     _update("users", {"telegram_id": f"eq.{telegram_id}"}, data)
 
 
@@ -100,8 +116,8 @@ def get_all_users():
 
 
 # ---------- USER_GROUPS ----------
+
 def register_user_group(user_id: int, chat_id: int):
-    # اول چک می‌کنیم وجود داره یا نه
     rows = _get(
         "user_groups",
         {
@@ -111,7 +127,6 @@ def register_user_group(user_id: int, chat_id: int):
     )
     if rows:
         return
-
     data = {
         "user_id": user_id,
         "chat_id": chat_id,
@@ -120,7 +135,6 @@ def register_user_group(user_id: int, chat_id: int):
 
 
 def get_group_users(chat_id: int):
-    # user_groups رو می‌گیریم بعد یوزرها رو جدا جدا
     ugs = _get("user_groups", {"chat_id": f"eq.{chat_id}"})
     users = []
     for ug in ugs:
@@ -132,13 +146,19 @@ def get_group_users(chat_id: int):
 
 
 # ---------- CATS ----------
-def get_user_cats(user_id: int):
-    return _get("cats", {"owner_id": f"eq.{user_id}"})
+
+def get_user_cats(owner_id: int):
+    return _get("cats", {"owner_id": f"eq.{owner_id}"})
 
 
-def add_cat(owner_id: int, name: str, rarity: str, element: str, trait: str, description: str) -> int:
-    import time
-
+def add_cat(
+    owner_id: int,
+    name: str,
+    rarity: str,
+    element: str,
+    trait: str,
+    description: str,
+) -> int:
     now = int(time.time())
     data = {
         "owner_id": owner_id,
@@ -149,8 +169,8 @@ def add_cat(owner_id: int, name: str, rarity: str, element: str, trait: str, des
         "description": description,
         "level": 1,
         "xp": 0,
-        "hunger": 50,
-        "happiness": 50,
+        "hunger": 60,
+        "happiness": 60,
         "created_at": now,
         "last_tick_ts": now,
     }
@@ -158,18 +178,23 @@ def add_cat(owner_id: int, name: str, rarity: str, element: str, trait: str, des
     return row["id"]
 
 
-def get_cat(cat_id: int, owner_id: int):
-    rows = _get(
-        "cats",
-        {
-            "id": f"eq.{cat_id}",
-            "owner_id": f"eq.{owner_id}",
-        },
-    )
+def get_cat(cat_id: int, owner_id: int | None = None):
+    params = {"id": f"eq.{cat_id}"}
+    if owner_id is not None:
+        params["owner_id"] = f"eq.{owner_id}"
+    rows = _get("cats", params)
     return rows[0] if rows else None
 
 
-def update_cat_stats(cat_id: int, owner_id: int, hunger: int, happiness: int, xp: int, level: int, last_tick_ts: int):
+def update_cat_stats(
+    cat_id: int,
+    owner_id: int,
+    hunger: int,
+    happiness: int,
+    xp: int,
+    level: int,
+    last_tick_ts: int,
+):
     data = {
         "hunger": hunger,
         "happiness": happiness,
@@ -184,4 +209,23 @@ def update_cat_stats(cat_id: int, owner_id: int, hunger: int, happiness: int, xp
             "owner_id": f"eq.{owner_id}",
         },
         data,
+    )
+
+
+def rename_cat(owner_id: int, cat_id: int, new_name: str):
+    return _update(
+        "cats",
+        {
+            "id": f"eq.{cat_id}",
+            "owner_id": f"eq.{owner_id}",
+        },
+        {"name": new_name},
+    )
+
+
+def set_cat_owner(cat_id: int, new_owner_id: int):
+    return _update(
+        "cats",
+        {"id": f"eq.{cat_id}"},
+        {"owner_id": new_owner_id},
     )
