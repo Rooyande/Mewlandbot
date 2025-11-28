@@ -7,6 +7,7 @@ from aiohttp import web
 from aiogram import Bot, Dispatcher, types
 
 from db import (
+    init_db, 
     get_user,
     get_or_create_user,
     update_user_mew,
