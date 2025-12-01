@@ -435,7 +435,7 @@ async def cmd_help(message: types.Message):
 
 
 # mew — رندم ۱ تا ۵ امتیاز
-@dp.message_handler(Regexp(r"^(?i)mew$"))
+@dp.message_handler(Regexp(r"(?i)^mew$"))
 async def handle_mew(message: types.Message):
     await maybe_trigger_random_event(message)
 
