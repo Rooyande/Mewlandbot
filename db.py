@@ -1,5 +1,6 @@
 # db.py
-# ارتباط با Supabase از طریق REST API
+# اتصال به Supabase با REST API (بدون Postgres و بدون supabase-py)
+
 import os
 import time
 import logging
@@ -25,7 +26,7 @@ BASE_HEADERS = {
 
 # ---------- Helperهای پایه ----------
 
-def _get(table: str, params: dict | None):
+def _get(table: str, params: dict | None = None):
     p = dict(params or {})
     if "select" not in p:
         p["select"] = "*"
@@ -40,7 +41,6 @@ def _get(table: str, params: dict | None):
 
 
 def _insert(table: str, data: dict):
-    # برای برگرداندن رکورد بعد از اینسرت
     headers = dict(BASE_HEADERS)
     headers["Prefer"] = "return=representation"
     r = requests.post(
@@ -74,7 +74,8 @@ def _update(table: str, filters: dict, data: dict):
 
 
 def init_db():
-    # می‌تونیم یه پینگ سبک بزنیم، ولی برای کم‌کردن ریکوئست فعلاً خالی می‌ذاریم
+    # فعلاً چیزی لازم نیست، فقط برای سازگاری با bot.py
+    logger.info("DB init ok (Supabase REST).")
     return
 
 
@@ -88,7 +89,7 @@ def get_user(telegram_id: int):
 def get_or_create_user(telegram_id: int, username: str | None):
     u = get_user(telegram_id)
     if u:
-        return u["id"], u
+        return u["id"]
 
     now = int(time.time())
     data = {
@@ -99,7 +100,7 @@ def get_or_create_user(telegram_id: int, username: str | None):
         "created_at": now,
     }
     row = _insert("users", data)
-    return row["id"], row
+    return row["id"]
 
 
 def update_user_mew(telegram_id: int, mew_points=None, last_mew_ts=None):
@@ -109,20 +110,21 @@ def update_user_mew(telegram_id: int, mew_points=None, last_mew_ts=None):
     if last_mew_ts is not None:
         data["last_mew_ts"] = last_mew_ts
     if not data:
-        return None
-    return _update("users", {"telegram_id": f"eq.{telegram_id}"}, data)
+        return
+    _update("users", {"telegram_id": f"eq.{telegram_id}"}, data)
+
+
+def get_all_users():
+    return _get("users", {})
 
 
 def get_leaderboard(limit: int = 10):
-    """
-    top N کاربر با بیشترین mew_points
-    """
-    params = {
-        "select": "telegram_id,username,mew_points",
+    rows = _get("users", {
         "order": "mew_points.desc",
         "limit": str(limit),
-    }
-    return _get("users", params)
+        "select": "telegram_id,username,mew_points",
+    })
+    return rows
 
 
 # ---------- USER_GROUPS ----------
@@ -183,11 +185,6 @@ def add_cat(
         "happiness": 60,
         "created_at": now,
         "last_tick_ts": now,
-        "is_alive": True,
-        "death_ts": None,
-        "overfeed_strikes": 0,
-        "is_sick": False,
-        "appearance": None,
     }
     row = _insert("cats", data)
     return row["id"]
@@ -201,20 +198,56 @@ def get_cat(cat_id: int, owner_id: int | None = None):
     return rows[0] if rows else None
 
 
-def update_cat_fields(cat_id: int, owner_id: int | None, data: dict):
-    filters = {"id": f"eq.{cat_id}"}
-    if owner_id is not None:
-        filters["owner_id"] = f"eq.{owner_id}"
-    return _update("cats", filters, data)
+def update_cat_stats(
+    cat_id: int,
+    owner_id: int,
+    hunger: int | None = None,
+    happiness: int | None = None,
+    xp: int | None = None,
+    level: int | None = None,
+    last_tick_ts: int | None = None,
+    description: str | None = None,
+):
+    data = {}
+    if hunger is not None:
+        data["hunger"] = hunger
+    if happiness is not None:
+        data["happiness"] = happiness
+    if xp is not None:
+        data["xp"] = xp
+    if level is not None:
+        data["level"] = level
+    if last_tick_ts is not None:
+        data["last_tick_ts"] = last_tick_ts
+    if description is not None:
+        data["description"] = description
+
+    if not data:
+        return
+    _update(
+        "cats",
+        {
+            "id": f"eq.{cat_id}",
+            "owner_id": f"eq.{owner_id}",
+        },
+        data,
+    )
 
 
 def rename_cat(owner_id: int, cat_id: int, new_name: str):
-    return update_cat_fields(cat_id, owner_id, {"name": new_name})
+    return _update(
+        "cats",
+        {
+            "id": f"eq.{cat_id}",
+            "owner_id": f"eq.{owner_id}",
+        },
+        {"name": new_name},
+    )
 
 
 def set_cat_owner(cat_id: int, new_owner_id: int):
-    return update_cat_fields(cat_id, None, {"owner_id": new_owner_id})
-
-
-def update_cat_appearance(owner_id: int, cat_id: int, appearance: str):
-    return update_cat_fields(cat_id, owner_id, {"appearance": appearance})
+    return _update(
+        "cats",
+        {"id": f"eq.{cat_id}"},
+        {"owner_id": new_owner_id},
+    )
