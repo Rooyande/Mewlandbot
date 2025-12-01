@@ -31,7 +31,7 @@ logger = logging.getLogger(__name__)
 
 # --------- تنظیمات محیط ---------
 
-BOT_TOKEN = os.getenv("BOT_TOKEN")
+BOT_TOKEN = os.getenv("8479244611:AAGHy5qix5B6BW2XKj65QY5-TlphnGZRHJ8")
 if not BOT_TOKEN:
     raise RuntimeError("BOT_TOKEN تنظیم نشده است.")
 
