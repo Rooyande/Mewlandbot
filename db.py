@@ -233,6 +233,17 @@ def rename_cat(owner_id: int, cat_id: int, new_name: str):
     """
     return _update("cats", {"id": f"eq.{cat_id}", "owner_id": f"eq.{owner_id}"}, {"name": new_name})
 
+def set_cat_owner(cat_id: int, new_owner_id: int):
+    """
+    Set a new owner for a cat.
+    Args:
+        cat_id: ID of the cat.
+        new_owner_id: ID of the new owner.
+    """
+    data = {"owner_id": new_owner_id}
+    return _update("cats", {"id": f"eq.{cat_id}"}, data)
+
+
 def register_user_group(user_id: int, chat_id: int):
     """
     Register a user's chat group.
