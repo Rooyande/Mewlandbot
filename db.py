@@ -73,29 +73,38 @@ def _insert(table: str, data: Dict[str, Any]):
         logger.error(f"Error during POST request to {table}: {err}")
         return None
 
-def _update(table: str, filters: Dict[str, Any], data: Dict[str, Any]):
+def _update(table: str, filters: dict, data: dict):
     """
-    Update data in the Supabase table.
-    Args:
-        table: Table name.
-        filters: Filter for which rows to update.
-        data: Data to update.
+    Perform an update on the given table and return the updated row(s).
+    Handles response gracefully even if no rows are returned.
     """
-    if not data:
-        return None
+    headers = dict(BASE_HEADERS)
+    headers["Prefer"] = "return=representation"
+    
     try:
-        params = {"select": "*", **filters}
-        response = requests.patch(
+        # Make the PATCH request to Supabase
+        logger.info(f"Sending PATCH request to {BASE_REST}/{table} with filters={filters} and data={data}")
+        r = requests.patch(
             f"{BASE_REST}/{table}",
-            headers=BASE_HEADERS,
-            params=params,
+            headers=headers,
+            params=filters,
             json=data,
-            timeout=10,
         )
-        response.raise_for_status()
-        return response.json()[0]  # Return the first row after update
-    except HTTPError as err:
-        logger.error(f"Error during PATCH request to {table}: {err}")
+        r.raise_for_status()
+
+        # Log response content
+        logger.info(f"Supabase response: {r.text}")
+
+        # Try to return the first item from the JSON response
+        if r.text.strip() == "":
+            return None  # No content in the response
+
+        return r.json()[0]  # Return the first row after update
+    except requests.exceptions.RequestException as e:
+        logger.error(f"Request failed: {e}")
+        return None
+    except requests.exceptions.JSONDecodeError as e:
+        logger.error(f"Failed to parse JSON response: {e}")
         return None
 
 def init_db():
