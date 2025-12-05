@@ -243,6 +243,16 @@ def set_cat_owner(cat_id: int, new_owner_id: int):
     data = {"owner_id": new_owner_id}
     return _update("cats", {"id": f"eq.{cat_id}"}, data)
 
+def get_leaderboard(limit: int = 10):
+    """
+    Get the leaderboard based on mew_points from the users table.
+    Args:
+        limit: Number of top users to fetch.
+    """
+    rows = _get("users", {"select": "telegram_id, username, mew_points", "order": "mew_points.desc", "limit": limit})
+    return rows
+
+
 
 def register_user_group(user_id: int, chat_id: int):
     """
