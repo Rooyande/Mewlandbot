@@ -137,20 +137,18 @@ def get_or_create_user(telegram_id: int, username: str | None):
     }
     return _insert("users", data)["id"]
 
-def update_user_mew(telegram_id: int, mew_points: int | None = None, last_mew_ts: int | None = None):
-    """
-    Update mew points and last_mew_ts for a user.
-    Args:
-        telegram_id: User's Telegram ID.
-        mew_points: New mew points value (optional).
-        last_mew_ts: Last mew timestamp (optional).
-    """
+def update_user_mew(telegram_id: int, mew_points: int | None = None, last_mew_ts: int | None = None, last_passive_ts: int | None = None):
     data = {}
     if mew_points is not None:
         data["mew_points"] = mew_points
     if last_mew_ts is not None:
         data["last_mew_ts"] = last_mew_ts
-    _update("users", {"telegram_id": f"eq.{telegram_id}"}, data)
+    if last_passive_ts is not None:
+        data["last_passive_ts"] = last_passive_ts  # Add this to handle passive income updates
+
+    if data:
+        _update("users", {"telegram_id": f"eq.{telegram_id}"}, data)
+
 
 # ---------- Cats Functions ----------
 
