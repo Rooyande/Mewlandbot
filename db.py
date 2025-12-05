@@ -223,6 +223,13 @@ def update_cat_stats(cat_id: int, owner_id: int, hunger: int, happiness: int, xp
     }
     _update("cats", {"id": f"eq.{cat_id}", "owner_id": f"eq.{owner_id}"}, data)
 
+def get_all_users():
+    """
+    Retrieve all users from the users table.
+    """
+    return _get("users", {})
+
+
 def rename_cat(owner_id: int, cat_id: int, new_name: str):
     """
     Rename a cat.
