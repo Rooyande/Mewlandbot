@@ -162,6 +162,19 @@ def get_user_cats(owner_id: int):
     """
     return _get("cats", {"owner_id": f"eq.{owner_id}"})
 
+def get_cat(cat_id: int, owner_id: int | None = None):
+    """
+    Get a cat by its ID and optionally filter by owner.
+    Args:
+        cat_id: Cat's ID.
+        owner_id: Owner's database ID (optional).
+    """
+    params = {"id": f"eq.{cat_id}"}
+    if owner_id is not None:
+        params["owner_id"] = f"eq.{owner_id}"
+    rows = _get("cats", params)
+    return rows[0] if rows else None
+
 def add_cat(owner_id: int, name: str, rarity: str, element: str, trait: str, description: str) -> int:
     """
     Add a new cat for a user.
