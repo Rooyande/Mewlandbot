@@ -219,3 +219,18 @@ def rename_cat(owner_id: int, cat_id: int, new_name: str):
         new_name: New name for the cat.
     """
     return _update("cats", {"id": f"eq.{cat_id}", "owner_id": f"eq.{owner_id}"}, {"name": new_name})
+
+def register_user_group(user_id: int, chat_id: int):
+    """
+    Register a user's chat group.
+    Args:
+        user_id: User's ID.
+        chat_id: Chat's ID.
+    """
+    rows = _get("user_groups", {"user_id": f"eq.{user_id}", "chat_id": f"eq.{chat_id}"})
+    if not rows:
+        data = {
+            "user_id": user_id,
+            "chat_id": chat_id
+        }
+        _insert("user_groups", data)
