@@ -1,8 +1,8 @@
 import os
 import time
 import requests
-from typing import Dict, Any
-from requests.exceptions import HTTPError
+from typing import Dict, Any, Optional, List
+from requests.exceptions import HTTPError, RequestException
 import logging
 
 # Set up logger
@@ -25,174 +25,193 @@ BASE_HEADERS = {
 
 # ---------- Helper functions ----------
 
-def _get(table: str, params: Dict[str, Any]):
+def _format_filter(key: str, value: Any) -> str:
+    """Format filter values for Supabase query."""
+    if key in ['telegram_id', 'id', 'owner_id', 'user_id', 'chat_id']:
+        return f"eq.{value}"
+    return str(value)
+
+def _get(table: str, params: Dict[str, Any] = None) -> List[Dict]:
     """
     A helper function to send GET requests to Supabase API.
-    Args:
-        table: Table name.
-        params: Parameters to filter the query.
     """
+    if params is None:
+        params = {}
+    
     # Ensure the 'select' key is added for querying
     if "select" not in params:
         params["select"] = "*"
 
-    # Format telegram_id properly
-    if 'telegram_id' in params:
-        params["telegram_id"] = f"eq.{params['telegram_id']}"
+    # Format parameters for Supabase
+    formatted_params = {}
+    for key, value in params.items():
+        if isinstance(value, (int, str)):
+            formatted_params[key] = _format_filter(key, value)
+        else:
+            formatted_params[key] = value
 
     try:
         response = requests.get(
             f"{BASE_REST}/{table}",
             headers=BASE_HEADERS,
-            params=params,
-            timeout=10,
+            params=formatted_params,
+            timeout=30,
         )
         response.raise_for_status()
         return response.json()
     except HTTPError as err:
         logger.error(f"Error during GET request to {table}: {err}")
         return []
+    except Exception as e:
+        logger.error(f"Unexpected error in _get: {e}")
+        return []
 
-def _insert(table: str, data: Dict[str, Any]):
+def _insert(table: str, data: Dict[str, Any]) -> Optional[Dict]:
     """
     Insert data into the Supabase table.
-    Args:
-        table: Table name.
-        data: Data to insert.
     """
     try:
         response = requests.post(
             f"{BASE_REST}/{table}",
             headers=BASE_HEADERS,
             json=data,
-            timeout=10,
+            timeout=30,
         )
         response.raise_for_status()
-        return response.json()[0]  # Return the first row from response
+        result = response.json()
+        return result[0] if isinstance(result, list) and result else result
     except HTTPError as err:
         logger.error(f"Error during POST request to {table}: {err}")
+        if response.status_code == 409:
+            logger.warning(f"Duplicate entry for {data}")
+        return None
+    except Exception as e:
+        logger.error(f"Unexpected error in _insert: {e}")
         return None
 
-def _update(table: str, filters: dict, data: dict):
+def _update(table: str, filters: Dict[str, Any], data: Dict[str, Any]) -> Optional[Dict]:
     """
     Perform an update on the given table and return the updated row(s).
-    Handles response gracefully even if no rows are returned.
     """
     headers = dict(BASE_HEADERS)
     headers["Prefer"] = "return=representation"
     
+    # Format filters for Supabase
+    formatted_filters = {}
+    for key, value in filters.items():
+        formatted_filters[key] = _format_filter(key, value)
+    
     try:
-        # Make the PATCH request to Supabase
-        logger.info(f"Sending PATCH request to {BASE_REST}/{table} with filters={filters} and data={data}")
+        logger.debug(f"PATCH {table} with filters={formatted_filters}, data={data}")
         r = requests.patch(
             f"{BASE_REST}/{table}",
             headers=headers,
-            params=filters,
+            params=formatted_filters,
             json=data,
+            timeout=30,
         )
         r.raise_for_status()
 
-        # Log response content
-        logger.info(f"Supabase response: {r.text}")
+        if not r.text.strip():
+            return None
 
-        # Try to return the first item from the JSON response
-        if r.text.strip() == "":
-            return None  # No content in the response
-
-        return r.json()[0]  # Return the first row after update
-    except requests.exceptions.RequestException as e:
+        result = r.json()
+        return result[0] if isinstance(result, list) and result else result
+    except RequestException as e:
         logger.error(f"Request failed: {e}")
         return None
-    except requests.exceptions.JSONDecodeError as e:
-        logger.error(f"Failed to parse JSON response: {e}")
+    except Exception as e:
+        logger.error(f"Unexpected error in _update: {e}")
         return None
 
+def _delete(table: str, filters: Dict[str, Any]) -> bool:
+    """Delete rows from table."""
+    try:
+        formatted_filters = {}
+        for key, value in filters.items():
+            formatted_filters[key] = _format_filter(key, value)
+            
+        response = requests.delete(
+            f"{BASE_REST}/{table}",
+            headers=BASE_HEADERS,
+            params=formatted_filters,
+            timeout=30,
+        )
+        response.raise_for_status()
+        return True
+    except Exception as e:
+        logger.error(f"Error deleting from {table}: {e}")
+        return False
+
 def init_db():
-    """
-    Initialize the database (not necessary if everything is created above)
-    """
-    # No specific code needed here, as the tables are created directly in the SQL Editor
-    pass
+    """Initialize database connection."""
+    logger.info("Database initialized")
 
 # ---------- Users Functions ----------
 
-def get_user(telegram_id: int):
-    """
-    Get a user by their telegram_id
-    Args:
-        telegram_id: Telegram ID of the user.
-    """
+def get_user(telegram_id: int) -> Optional[Dict]:
+    """Get a user by their telegram_id."""
     rows = _get("users", {"telegram_id": telegram_id})
     return rows[0] if rows else None
 
-def get_or_create_user(telegram_id: int, username: str | None):
+def get_or_create_user(telegram_id: int, username: str = None) -> Optional[int]:
     """
     Get or create a user based on telegram_id and username.
-    Args:
-        telegram_id: User's Telegram ID.
-        username: User's Telegram username.
+    Returns user database ID or None.
     """
     user = get_user(telegram_id)
     if user:
-        return user["id"]
-
+        return user.get("id")
+    
     # If the user doesn't exist, create them
     data = {
         "telegram_id": telegram_id,
         "username": username,
-        "mew_points": 0,
+        "mew_points": 100,  # Starting points for new users
         "last_mew_ts": None,
+        "last_passive_ts": int(time.time()),
         "created_at": int(time.time()),
     }
-    return _insert("users", data)["id"]
+    
+    result = _insert("users", data)
+    return result.get("id") if result else None
 
-def update_user_mew(telegram_id: int, mew_points: int | None = None, last_mew_ts: int | None = None, last_passive_ts: int | None = None):
+def update_user_mew(telegram_id: int, mew_points: int = None, 
+                    last_mew_ts: int = None, last_passive_ts: int = None) -> bool:
+    """Update user mew points and timestamps."""
     data = {}
     if mew_points is not None:
         data["mew_points"] = mew_points
     if last_mew_ts is not None:
         data["last_mew_ts"] = last_mew_ts
     if last_passive_ts is not None:
-        data["last_passive_ts"] = last_passive_ts  # Add this to handle passive income updates
+        data["last_passive_ts"] = last_passive_ts
 
     if data:
-        _update("users", {"telegram_id": f"eq.{telegram_id}"}, data)
-
+        result = _update("users", {"telegram_id": telegram_id}, data)
+        return result is not None
+    return False
 
 # ---------- Cats Functions ----------
 
-def get_user_cats(owner_id: int):
-    """
-    Get all cats for a user by owner_id.
-    Args:
-        owner_id: User's database ID.
-    """
-    return _get("cats", {"owner_id": f"eq.{owner_id}"})
+def get_user_cats(owner_id: int, include_dead: bool = False) -> List[Dict]:
+    """Get all cats for a user by owner_id."""
+    params = {"owner_id": owner_id}
+    if not include_dead:
+        params["is_alive"] = "eq.true"
+    return _get("cats", params)
 
-def get_cat(cat_id: int, owner_id: int | None = None):
-    """
-    Get a cat by its ID and optionally filter by owner.
-    Args:
-        cat_id: Cat's ID.
-        owner_id: Owner's database ID (optional).
-    """
-    params = {"id": f"eq.{cat_id}"}
+def get_cat(cat_id: int, owner_id: int = None) -> Optional[Dict]:
+    """Get a cat by its ID and optionally filter by owner."""
+    params = {"id": cat_id}
     if owner_id is not None:
-        params["owner_id"] = f"eq.{owner_id}"
+        params["owner_id"] = owner_id
     rows = _get("cats", params)
     return rows[0] if rows else None
 
-def add_cat(owner_id: int, name: str, rarity: str, element: str, trait: str, description: str) -> int:
-    """
-    Add a new cat for a user.
-    Args:
-        owner_id: Owner's database ID.
-        name: Name of the cat.
-        rarity: Rarity of the cat.
-        element: Element of the cat.
-        trait: Trait of the cat.
-        description: Description of the cat.
-    """
+def add_cat(owner_id: int, name: str, rarity: str, element: str, 
+            trait: str, description: str) -> Optional[int]:
+    """Add a new cat for a user."""
     data = {
         "owner_id": owner_id,
         "name": name,
@@ -202,83 +221,83 @@ def add_cat(owner_id: int, name: str, rarity: str, element: str, trait: str, des
         "description": description,
         "level": 1,
         "xp": 0,
-        "hunger": 60,
-        "happiness": 60,
+        "hunger": 100,
+        "happiness": 100,
+        "stat_power": 1,
+        "stat_agility": 1,
+        "stat_luck": 1,
+        "gear": "",
+        "is_alive": True,
         "created_at": int(time.time()),
         "last_tick_ts": int(time.time()),
     }
-    return _insert("cats", data)["id"]
+    result = _insert("cats", data)
+    return result.get("id") if result else None
 
-def update_cat_stats(cat_id: int, owner_id: int, hunger: int, happiness: int, xp: int, level: int, last_tick_ts: int):
+def update_cat_stats(cat_id: int, owner_id: int, **kwargs) -> bool:
     """
     Update stats for a cat.
-    Args:
-        cat_id: ID of the cat.
-        owner_id: Owner's database ID.
-        hunger: Hunger stat.
-        happiness: Happiness stat.
-        xp: XP stat.
-        level: Level of the cat.
-        last_tick_ts: Last tick timestamp.
+    Accepts: hunger, happiness, xp, level, gear, stat_power, 
+             stat_agility, stat_luck, last_tick_ts, is_alive, description
     """
+    if not kwargs:
+        return False
+    
+    # Remove None values
+    data = {k: v for k, v in kwargs.items() if v is not None}
+    
+    if data:
+        result = _update("cats", {"id": cat_id, "owner_id": owner_id}, data)
+        return result is not None
+    return False
+
+def kill_cat(cat_id: int, owner_id: int) -> bool:
+    """Mark a cat as dead."""
     data = {
-        "hunger": hunger,
-        "happiness": happiness,
-        "xp": xp,
-        "level": level,
-        "last_tick_ts": last_tick_ts,
+        "is_alive": False,
+        "death_ts": int(time.time()),
+        "hunger": 0,
+        "happiness": 0,
     }
-    _update("cats", {"id": f"eq.{cat_id}", "owner_id": f"eq.{owner_id}"}, data)
+    return update_cat_stats(cat_id, owner_id, **data)
 
-def get_all_users():
-    """
-    Retrieve all users from the users table.
-    """
-    return _get("users", {})
+def get_all_users(limit: int = 1000) -> List[Dict]:
+    """Retrieve all users from the users table."""
+    return _get("users", {"limit": limit, "order": "id.desc"})
 
+def rename_cat(owner_id: int, cat_id: int, new_name: str) -> bool:
+    """Rename a cat."""
+    return update_cat_stats(cat_id, owner_id, name=new_name)
 
-def rename_cat(owner_id: int, cat_id: int, new_name: str):
-    """
-    Rename a cat.
-    Args:
-        owner_id: Owner's database ID.
-        cat_id: ID of the cat.
-        new_name: New name for the cat.
-    """
-    return _update("cats", {"id": f"eq.{cat_id}", "owner_id": f"eq.{owner_id}"}, {"name": new_name})
-
-def set_cat_owner(cat_id: int, new_owner_id: int):
-    """
-    Set a new owner for a cat.
-    Args:
-        cat_id: ID of the cat.
-        new_owner_id: ID of the new owner.
-    """
+def set_cat_owner(cat_id: int, new_owner_id: int) -> bool:
+    """Set a new owner for a cat."""
     data = {"owner_id": new_owner_id}
-    return _update("cats", {"id": f"eq.{cat_id}"}, data)
+    result = _update("cats", {"id": cat_id}, data)
+    return result is not None
 
-def get_leaderboard(limit: int = 10):
-    """
-    Get the leaderboard based on mew_points from the users table.
-    Args:
-        limit: Number of top users to fetch.
-    """
-    rows = _get("users", {"select": "telegram_id, username, mew_points", "order": "mew_points.desc", "limit": limit})
-    return rows
+def get_leaderboard(limit: int = 10) -> List[Dict]:
+    """Get the leaderboard based on mew_points."""
+    return _get("users", {
+        "select": "telegram_id,username,mew_points",
+        "order": "mew_points.desc",
+        "limit": limit
+    })
 
-
-
-def register_user_group(user_id: int, chat_id: int):
-    """
-    Register a user's chat group.
-    Args:
-        user_id: User's ID.
-        chat_id: Chat's ID.
-    """
-    rows = _get("user_groups", {"user_id": f"eq.{user_id}", "chat_id": f"eq.{chat_id}"})
+def register_user_group(user_id: int, chat_id: int) -> bool:
+    """Register a user's chat group."""
+    rows = _get("user_groups", {"user_id": user_id, "chat_id": chat_id})
     if not rows:
-        data = {
-            "user_id": user_id,
-            "chat_id": chat_id
-        }
-        _insert("user_groups", data)
+        data = {"user_id": user_id, "chat_id": chat_id}
+        result = _insert("user_groups", data)
+        return result is not None
+    return True
+
+def get_daily_event_count(chat_id: int, date_str: str) -> int:
+    """Get daily event count for a chat."""
+    # This is a simplified in-memory version; for production, store in DB
+    return 0
+
+def update_daily_event_count(chat_id: int, date_str: str, count: int) -> bool:
+    """Update daily event count for a chat."""
+    # For production, implement database storage
+    return True
