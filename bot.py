@@ -81,9 +81,14 @@ from aiogram.contrib.fsm_storage.memory import MemoryStorage
 storage = MemoryStorage()
 logger.warning("Using MemoryStorage (Redis disabled / no external Redis configured).")
 
+from aiogram import Bot
+from aiogram.dispatcher import Dispatcher as AiogramDispatcher
+
 bot = Bot(BOT_TOKEN, parse_mode=types.ParseMode.HTML)
 dp = Dispatcher(bot, storage=storage)
 
+Bot.set_current(bot)
+AiogramDispatcher.set_current(dp)
 
 # ========= State Machines =========
 
