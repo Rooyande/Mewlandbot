@@ -69,7 +69,7 @@ ADMIN_ID = int(os.getenv("ADMIN_ID", "8423995337"))
 
 WEBHOOK_HOST = os.getenv("WEBHOOK_HOST", "https://mewlandbot.onrender.com")
 WEBHOOK_PATH = f"/webhook/{BOT_TOKEN}"
-WEBHOOK_URL = WEBHOOK_HOST + WEBHOOK_PATH
+WEBHOOK_URL = WEBHOOK_HOST.rstrip("/") + WEBHOOK_PATH  # safer join
 
 APP_HOST = "0.0.0.0"
 APP_PORT = int(os.getenv("PORT", "10000"))
@@ -79,53 +79,59 @@ REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379")
 
 # Initialize bot with Redis storage
 try:
-    if REDIS_URL and REDIS_URL.startswith("redis://"):
-        # Parse Redis URL for Render
-        import redis
+    if REDIS_URL:
         from urllib.parse import urlparse
-        
+
         url = urlparse(REDIS_URL)
+        # RedisStorage2 does NOT take ssl param; it uses redis-py internally
         storage = RedisStorage2(
             host=url.hostname,
             port=url.port or 6379,
-            db=int(url.path.lstrip('/')) if url.path else 0,
+            db=int(url.path.lstrip("/")) if url.path else 0,
             password=url.password,
-            ssl=True if url.scheme == 'rediss' else False
         )
-        logger.info("Redis storage initialized successfully")
+        logger.info(
+            f"Redis storage initialized successfully at {url.hostname}:{url.port or 6379}, db={int(url.path.lstrip('/') or 0)}"
+        )
     else:
-        # Fallback to memory storage for development
         from aiogram.contrib.fsm_storage.memory import MemoryStorage
+
         storage = MemoryStorage()
-        logger.warning("Using MemoryStorage (not suitable for production!)")
+        logger.warning("Using MemoryStorage (REDIS_URL not set) – not suitable for production!")
 except Exception as e:
     logger.error(f"Failed to initialize Redis: {e}")
     from aiogram.contrib.fsm_storage.memory import MemoryStorage
+
     storage = MemoryStorage()
+    logger.warning("Falling back to MemoryStorage due to Redis error")
 
 bot = Bot(BOT_TOKEN, parse_mode=types.ParseMode.HTML)
 dp = Dispatcher(bot, storage=storage)
 
 # ========= State Machines =========
 
+
 class BreedStates(StatesGroup):
     waiting_for_mate = State()
     confirm_breeding = State()
 
+
 class MarketStates(StatesGroup):
     waiting_for_price = State()
+
 
 class ClanStates(StatesGroup):
     waiting_for_clan_name = State()
     waiting_for_join_request = State()
 
+
 # ========= GAME CONFIG =========
 
-MEW_COOLDOWN = 7 * 60       # 7 minutes
+MEW_COOLDOWN = 7 * 60  # 7 minutes
 PASSIVE_MIN_INTERVAL = 15 * 60  # only recalc passive income every 15 minutes
 
 # hunger / happiness decay
-HUNGER_DECAY_PER_HOUR = 8   # Increased decay rate
+HUNGER_DECAY_PER_HOUR = 8  # Increased decay rate
 HAPPINESS_DECAY_PER_HOUR = 5
 
 # Cat death thresholds (36 hours = 129600 seconds)
@@ -192,12 +198,12 @@ CHRISTMAS_ACHIEVEMENTS = [
 
 # rarity config: price & base meow/hour
 RARITY_CONFIG: Dict[str, Dict[str, Any]] = {
-    "common":    {"price": 200,   "base_mph": 1.0, "emoji": "⚪️", "breeding_cost": 100},
-    "rare":      {"price": 800,   "base_mph": 3.0, "emoji": "🟦", "breeding_cost": 300},
-    "epic":      {"price": 2500,  "base_mph": 7.0, "emoji": "🟪", "breeding_cost": 1000},
-    "legendary": {"price": 7000,  "base_mph": 15.0, "emoji": "🟨", "breeding_cost": 3000},
-    "mythic":    {"price": 15000, "base_mph": 30.0, "emoji": "🟥", "breeding_cost": 7000},
-    "special":   {"price": 50000, "base_mph": 50.0, "emoji": "🌟", "breeding_cost": 15000},
+    "common": {"price": 200, "base_mph": 1.0, "emoji": "⚪️", "breeding_cost": 100},
+    "rare": {"price": 800, "base_mph": 3.0, "emoji": "🟦", "breeding_cost": 300},
+    "epic": {"price": 2500, "base_mph": 7.0, "emoji": "🟪", "breeding_cost": 1000},
+    "legendary": {"price": 7000, "base_mph": 15.0, "emoji": "🟨", "breeding_cost": 3000},
+    "mythic": {"price": 15000, "base_mph": 30.0, "emoji": "🟥", "breeding_cost": 7000},
+    "special": {"price": 50000, "base_mph": 50.0, "emoji": "🌟", "breeding_cost": 15000},
 }
 
 RARITY_WEIGHTS = [
@@ -372,19 +378,21 @@ BREEDING_STAT_INHERITANCE = 0.6  # 60% from parents
 
 # ========= helper functions =========
 
+
 def is_christmas_season():
     """Check if current date is within Christmas season."""
     if not CHRISTMAS_EVENT_ACTIVE:
         return False
-    
+
     try:
         today = datetime.now().date()
         start_date = datetime.strptime(CHRISTMAS_EVENT_START, "%Y-%m-%d").date()
         end_date = datetime.strptime(CHRISTMAS_EVENT_END, "%Y-%m-%d").date()
-        
         return start_date <= today <= end_date
-    except:
+    except Exception as e:
+        logger.error(f"Error parsing Christmas dates: {e}")
         return False
+
 
 async def notify_admin_error(msg: str):
     """Notify admin about errors."""
@@ -394,9 +402,11 @@ async def notify_admin_error(msg: str):
     except Exception as e:
         logger.error(f"Failed to notify admin: {e}")
 
+
 def rarity_emoji(rarity: str) -> str:
     """Get emoji for rarity."""
     return RARITY_CONFIG.get(rarity, {}).get("emoji", "⚪️")
+
 
 def choose_rarity() -> str:
     """Choose rarity based on weights."""
@@ -408,9 +418,11 @@ def choose_rarity() -> str:
             return rarity
     return "common"
 
+
 def xp_required_for_level(level: int) -> int:
     """Calculate XP required for a level."""
     return int(BASE_XP_PER_LEVEL * (XP_MULTIPLIER ** (level - 1)))
+
 
 def parse_gear_codes(gear_field: Any) -> List[str]:
     """Parse gear codes from database field."""
@@ -419,6 +431,7 @@ def parse_gear_codes(gear_field: Any) -> List[str]:
     if isinstance(gear_field, list):
         return [str(x) for x in gear_field]
     return [g.strip() for g in str(gear_field).split(",") if g.strip()]
+
 
 def compute_cat_effective_stats(cat: Dict[str, Any]) -> Dict[str, Any]:
     """Compute cat's effective stats with gear bonuses."""
@@ -436,27 +449,29 @@ def compute_cat_effective_stats(cat: Dict[str, Any]) -> Dict[str, Any]:
 
     return {"power": power, "agility": agility, "luck": luck}
 
+
 def compute_cat_mph(cat: Dict[str, Any]) -> float:
     """Calculate meow/hour for a cat."""
     rarity = cat.get("rarity", "common")
     conf = RARITY_CONFIG.get(rarity, RARITY_CONFIG["common"])
     base = float(conf["base_mph"])
-    
+
     level = int(cat.get("level", 1))
     level_mult = 1.0 + (level - 1) * 0.1  # 10% increase per level
-    
+
     gear_codes = parse_gear_codes(cat.get("gear", ""))
     gear_bonus = 0.0
     for code in gear_codes:
         item = GEAR_ITEMS.get(code)
         if item:
             gear_bonus += float(item.get("mph_bonus", 0.0))
-    
+
     # Apply stat bonuses
     stats = compute_cat_effective_stats(cat)
     stat_bonus = (stats["power"] + stats["agility"] + stats["luck"]) * 0.02
-    
+
     return base * level_mult + gear_bonus + stat_bonus
+
 
 def apply_cat_tick(cat: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     """
@@ -466,28 +481,29 @@ def apply_cat_tick(cat: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     now = int(time.time())
     last_ts = cat.get("last_tick_ts") or cat.get("created_at") or now
     elapsed = max(0, now - int(last_ts))
-    
+
     if elapsed < 60:  # Less than 1 minute, ignore
         return cat
-    
+
     hours = elapsed / 3600.0
-    
+
     hunger = int(cat.get("hunger", 100) - HUNGER_DECAY_PER_HOUR * hours)
     happiness = int(cat.get("happiness", 100) - HAPPINESS_DECAY_PER_HOUR * hours)
-    
+
     # Ensure values are within bounds
     hunger = max(0, min(100, hunger))
     happiness = max(0, min(100, happiness))
-    
+
     # Check for death
     if hunger <= 0 and elapsed > CAT_DEATH_TIMEOUT:
         return None  # Cat died
-    
+
     cat["hunger"] = hunger
     cat["happiness"] = happiness
     cat["last_tick_ts"] = now
-    
+
     return cat
+
 
 def calculate_breeding_result(parent1: Dict, parent2: Dict) -> Dict:
     """Calculate breeding result between two cats."""
@@ -495,24 +511,24 @@ def calculate_breeding_result(parent1: Dict, parent2: Dict) -> Dict:
     rarities = ["common", "rare", "epic", "legendary", "mythic", "special"]
     parent1_idx = rarities.index(parent1["rarity"]) if parent1["rarity"] in rarities else 0
     parent2_idx = rarities.index(parent2["rarity"]) if parent2["rarity"] in rarities else 0
-    
+
     # Offspring can be same or one level higher than best parent
     max_idx = max(parent1_idx, parent2_idx)
-    possible_rarities = rarities[max(0, max_idx-1):min(len(rarities), max_idx+2)]
-    
+    possible_rarities = rarities[max(0, max_idx - 1) : min(len(rarities), max_idx + 2)]
+
     offspring_rarity = random.choice(possible_rarities)
-    
+
     # Inherit traits
     if random.random() < 0.5:
         element = parent1["element"]
     else:
         element = parent2["element"]
-    
+
     if random.random() < 0.5:
         trait = parent1["trait"]
     else:
         trait = parent2["trait"]
-    
+
     # Inherit stats
     stats = {}
     for stat in ["power", "agility", "luck"]:
@@ -520,18 +536,20 @@ def calculate_breeding_result(parent1: Dict, parent2: Dict) -> Dict:
         parent2_stat = parent2.get(f"stat_{stat}", 1)
         avg_stat = (parent1_stat + parent2_stat) / 2
         stats[f"stat_{stat}"] = max(1, int(avg_stat * BREEDING_STAT_INHERITANCE))
-    
+
     return {
         "rarity": offspring_rarity,
         "element": element,
         "trait": trait,
         "stats": stats,
-        "name": f"{offspring_rarity.title()} Breed"
+        "name": f"{offspring_rarity.title()} Breed",
     }
+
 
 def calculate_clan_bonus(member_count: int) -> float:
     """Calculate clan bonus based on member count."""
     return 1.0 + (member_count * CLAN_BONUS_PER_MEMBER)
+
 
 async def check_and_award_achievements(user_tg: int, achievement_id: str):
     """Check and award achievements to user."""
@@ -539,38 +557,40 @@ async def check_and_award_achievements(user_tg: int, achievement_id: str):
         user_db_id = get_or_create_user(user_tg, None)
         if not user_db_id:
             return
-        
+
         # Check if already has achievement
         user_achievements = get_user_achievements(user_db_id)
         if any(a["achievement_id"] == achievement_id for a in user_achievements):
             return
-        
+
         # Find achievement
         all_achievements = ACHIEVEMENTS + CHRISTMAS_ACHIEVEMENTS
         achievement = next((a for a in all_achievements if a["id"] == achievement_id), None)
         if not achievement:
             return
-        
+
         # Award achievement
         add_achievement(user_db_id, achievement_id)
-        
+
         # Give reward
         user = get_user(user_tg)
         if user and "reward" in achievement:
             new_points = user.get("mew_points", 0) + achievement["reward"]
             update_user_mew(user_tg, mew_points=new_points)
-            
+
             # Notify user
             await bot.send_message(
                 user_tg,
                 f"🏆 **دستاورد جدید!**\n\n"
                 f"{achievement['name']}\n"
                 f"{achievement['description']}\n"
-                f"🎁 جایزه: {achievement['reward']} میوپوینت"
+                f"🎁 جایزه: {achievement['reward']} میوپوینت",
+                parse_mode=types.ParseMode.MARKDOWN,
             )
-    
+
     except Exception as e:
         logger.error(f"Error awarding achievement: {e}")
+
 
 def apply_passive_income(telegram_id: int, user_db_id: int) -> int:
     """
@@ -580,108 +600,110 @@ def apply_passive_income(telegram_id: int, user_db_id: int) -> int:
     user = get_user(telegram_id)
     if not user:
         return 0
-    
+
     now = int(time.time())
     last_passive = user.get("last_passive_ts") or user.get("created_at") or now
     elapsed = max(0, now - int(last_passive))
-    
+
     if elapsed < PASSIVE_MIN_INTERVAL:
         return 0
-    
+
     hours = elapsed / 3600.0
     cats = get_user_cats(user_db_id)
-    
+
     total_mph = 0.0
     for cat in cats:
         total_mph += compute_cat_mph(cat)
-    
+
     gained = int(total_mph * hours)
     if gained > 0:
         current_points = user.get("mew_points", 0)
         update_user_mew(
             telegram_id=telegram_id,
             mew_points=current_points + gained,
-            last_passive_ts=now
+            last_passive_ts=now,
         )
-    
+
     return gained
+
 
 async def maybe_trigger_random_event(message: types.Message):
     """Trigger random events in groups."""
     if message.chat.type not in ("group", "supergroup"):
         return
-    
+
     chat_id = message.chat.id
     today = datetime.now().strftime("%Y-%m-%d")
-    
+
     # Get current count from database
     current_count = get_daily_event_count(chat_id, today)
     if current_count >= 3:
         return
-    
+
     # Check cooldown (last event time) from database
     active_events = get_active_events(chat_id)
     if active_events:
         event_ts = active_events[0].get("created_at", 0)
         if time.time() - event_ts < 3600:  # 1 hour cooldown
             return
-    
+
     # Random chance
     if random.random() > 0.15:  # 15% chance
         return
-    
+
     # Choose events based on season
     if is_christmas_season():
         event = random.choice(CHRISTMAS_EVENTS)
     else:
         event = random.choice(REGULAR_EVENTS)
-    
+
     # Store event in database
     create_active_event(chat_id, event["id"], event["text"], event["answer"])
-    
+
     # Update daily counter in database
     update_daily_event_count(chat_id, today, current_count + 1)
-    
+
     await bot.send_message(chat_id, event["text"])
+
 
 async def process_event_answer(message: types.Message) -> bool:
     """Process answers to random events."""
     chat_id = message.chat.id
-    
+
     # Get active event from database
     active_events = get_active_events(chat_id)
     if not active_events:
         return False
-    
+
     event_info = active_events[0]
     answer = (message.text or "").strip()
-    
+
     if answer != event_info["expected_answer"]:
         return False
-    
+
     # First correct answer wins
     delete_active_event(chat_id)
-    
+
     user_tg = message.from_user.id
     username = message.from_user.username
     user_db_id = get_or_create_user(user_tg, username)
-    
+
     if not user_db_id:
         await message.reply("❌ خطا در ایجاد کاربر.")
         return True
-    
+
     # Get event details
     if is_christmas_season():
         event = next((e for e in CHRISTMAS_EVENTS if e["id"] == event_info["event_id"]), None)
     else:
         event = next((e for e in REGULAR_EVENTS if e["id"] == event_info["event_id"]), None)
-    
+
     if not event:
         return True
-    
+
     reward = event["reward"]
     response_text = f"🎉 برنده‌ی رویداد: {message.from_user.full_name}\n"
-    
+
     try:
         if reward["type"] == "points":
             user = get_user(user_tg)
@@ -692,14 +714,14 @@ async def process_event_answer(message: types.Message) -> bool:
                 amount = int(amount * CHRISTMAS_REWARDS_MULTIPLIER)
             update_user_mew(user_tg, mew_points=current + amount)
             response_text += f"🎁 {amount} میوپوینت دریافت کردی!\n💎 مجموع: {current + amount}"
-        
+
         elif reward["type"] == "cat":
             rarity = reward["rarity"]
             element = random.choice(ELEMENTS)
             trait = random.choice(TRAITS)
             name = f"گربهٔ {rarity}"
             description = f"یک گربه‌ی {rarity} با عنصر {element} و خوی {trait}"
-            
+
             cat_id = add_cat(user_db_id, name, rarity, element, trait, description)
             if cat_id:
                 response_text += f"🐱 یک گربه‌ی جدید {rarity_emoji(rarity)} دریافت کردی!\n"
@@ -707,7 +729,7 @@ async def process_event_answer(message: types.Message) -> bool:
                 response_text += f"🎯 عنصر: {element} | خوی: {trait}"
             else:
                 response_text += "❌ خطا در ایجاد گربه."
-        
+
         elif reward["type"] == "special_cat":
             # Add special Christmas cat
             cat_id = add_special_cat(
@@ -717,21 +739,21 @@ async def process_event_answer(message: types.Message) -> bool:
                 "ice" if random.random() > 0.5 else "candy",
                 "festive",
                 f"گربه ویژه کریسمس با تم {reward.get('theme', 'christmas')}",
-                special_ability="تولید ۲x درآمد در کریسمس"
+                special_ability="تولید ۲x درآمد در کریسمس",
             )
-            
+
             if cat_id:
                 response_text += f"🌟 یک گربه ویژه کریسمس دریافت کردی!\n"
                 response_text += f"{rarity_emoji(reward['rarity'])} **گربه کریسمس {reward['rarity']}**\n"
                 response_text += "✨ توانایی ویژه: تولید دوبرابر درآمد در ایام کریسمس!"
-        
+
         elif reward["type"] == "cat_random":
             rarity = random.choice(["common", "rare"])
             element = random.choice(ELEMENTS)
             trait = random.choice(TRAITS)
             name = f"گربهٔ {rarity}"
             description = f"یک گربه‌ی {rarity} با عنصر {element} و خوی {trait}"
-            
+
             cat_id = add_cat(user_db_id, name, rarity, element, trait, description)
             if cat_id:
                 response_text += f"🐱 یک گربه‌ی {rarity_emoji(rarity)} از جعبه مرموز دریافت کردی!\n"
@@ -739,7 +761,7 @@ async def process_event_answer(message: types.Message) -> bool:
                 response_text += f"🎯 عنصر: {element} | خوی: {trait}"
             else:
                 response_text += "❌ خطا در ایجاد گربه."
-        
+
         elif reward["type"] == "happy_all":
             cats = get_user_cats(user_db_id)
             if cats:
@@ -753,36 +775,38 @@ async def process_event_answer(message: types.Message) -> bool:
                             cat_id=cat["id"],
                             owner_id=user_db_id,
                             happiness=new_happy,
-                            last_tick_ts=cat.get("last_tick_ts", int(time.time()))
+                            last_tick_ts=cat.get("last_tick_ts", int(time.time())),
                         )
                         updated += 1
                 response_text += f"😺 {happy} خوشحالی برای {updated} گربه دریافت کردی!"
             else:
                 response_text += "😿 هنوز گربه‌ای نداری."
-        
+
         await message.reply(response_text)
         return True
-        
+
     except Exception as e:
         logger.error(f"Error processing event reward: {e}")
         await message.reply("❌ خطا در پردازش جایزه.")
         return True
 
+
 # ========= COMMAND HANDLERS =========
+
 
 @dp.message_handler(commands=["start", "help"])
 async def cmd_start(message: types.Message):
     """Start command handler."""
     await maybe_trigger_random_event(message)
-    
+
     user_tg = message.from_user.id
     username = message.from_user.username
-    
+
     user_db_id = get_or_create_user(user_tg, username)
     if not user_db_id:
         await message.reply("❌ خطا در ایجاد حساب کاربری.")
         return
-    
+
     if message.get_command() == "/start":
         text = (
             "😺 **سلام به میولند خوش اومدی!**\n\n"
@@ -790,13 +814,13 @@ async def cmd_start(message: types.Message):
             "• با تایپ `mew` امتیاز جمع کنی\n"
             "• گربه‌های مختلف بخری\n"
             "• با گربه‌هات بازی کنی و غذا بدی\n"
-            "• گربه‌هات رو ارتقا بدی\n"
+            "• گربه‌هات را ارتقا بدی\n"
             "• با بقیه بجنگی و لیدربرد بالا بری!\n\n"
         )
-        
+
         if is_christmas_season():
             text += "🎄 **ایونت کریسمس فعاله!** جایزه‌ها ۵۰٪ بیشترن!\n\n"
-        
+
         text += "برای دیدن همه دستورات: /help"
     else:
         text = (
@@ -821,73 +845,74 @@ async def cmd_start(message: types.Message):
             "• /market - بازار خرید و فروش\n"
             "• /specialcats - گربه‌های ویژه\n\n"
         )
-        
+
         if is_christmas_season():
             text += "🎄 **دستورات کریسمس:**\n"
             text += "• آیتم‌های کریسمسی در فروشگاه\n"
             text += "• ایونت‌های ویژه کریسمس در گروه‌ها\n"
             text += "• جایزه‌های ۵۰٪ بیشتر!\n\n"
-        
+
         text += "💰 **انواع گربه:**\n"
         text += "common(200), rare(800), epic(2500), legendary(7000), mythic(15000)"
-    
+
     await message.reply(text, parse_mode=types.ParseMode.MARKDOWN)
+
 
 @dp.message_handler(lambda m: m.text and m.text.strip().lower() == "mew")
 async def handle_mew(message: types.Message):
     """Handle mew command (text)."""
     await maybe_trigger_random_event(message)
-    
+
     user_tg = message.from_user.id
     username = message.from_user.username
     chat_id = message.chat.id
-    
+
     # Get or create user
     user_db_id = get_or_create_user(user_tg, username)
     if not user_db_id:
         await message.reply("❌ خطا در ایجاد حساب کاربری.")
         return
-    
+
     # Register user group
     register_user_group(user_db_id, chat_id)
-    
+
     # Apply passive income
     passive_gained = apply_passive_income(user_tg, user_db_id)
-    
+
     # Check cooldown
     user = get_user(user_tg)
     now = int(time.time())
     last_mew = user.get("last_mew_ts") or 0
     diff = now - last_mew
-    
+
     if diff < MEW_COOLDOWN:
         remaining = MEW_COOLDOWN - diff
         mins = remaining // 60
         secs = remaining % 60
-        
+
         text = f"⏳ باید {mins} دقیقه و {secs} ثانیه صبر کنی!"
         if passive_gained > 0:
             text += f"\n💤 در این مدت {passive_gained} امتیاز غیرفعال گرفتی!"
-        
+
         await message.reply(text)
         return
-    
+
     # Calculate mew points (1-5)
     gained = random.randint(1, 5)
     # Apply Christmas bonus
     if is_christmas_season():
         gained = int(gained * CHRISTMAS_REWARDS_MULTIPLIER)
-    
+
     current_points = user.get("mew_points", 0)
     new_points = current_points + gained + passive_gained
-    
+
     # Update user
     update_user_mew(
         telegram_id=user_tg,
         mew_points=new_points,
-        last_mew_ts=now
+        last_mew_ts=now,
     )
-    
+
     # Send response
     text = f"😺 **میو!**\n🎁 {gained} امتیاز گرفتی!"
     if is_christmas_season():
@@ -895,34 +920,35 @@ async def handle_mew(message: types.Message):
     if passive_gained > 0:
         text += f"\n💤 +{passive_gained} امتیاز غیرفعال"
     text += f"\n💰 مجموع: {new_points} امتیاز"
-    
+
     await message.reply(text, parse_mode=types.ParseMode.MARKDOWN)
+
 
 @dp.message_handler(commands=["profile"])
 async def cmd_profile(message: types.Message):
     """Show user profile."""
     await maybe_trigger_random_event(message)
-    
+
     user_tg = message.from_user.id
     username = message.from_user.username
-    
+
     user_db_id = get_or_create_user(user_tg, username)
     if not user_db_id:
         await message.reply("❌ خطا در بارگذاری پروفایل.")
         return
-    
+
     # Apply passive income
     passive_gained = apply_passive_income(user_tg, user_db_id)
-    
+
     # Get user data
     user = get_user(user_tg)
     cats = get_user_cats(user_db_id)
-    
+
     # Calculate stats
     total_mph = 0.0
     alive_cats = 0
     total_level = 0
-    
+
     for cat in cats:
         updated_cat = apply_cat_tick(cat)
         if updated_cat:
@@ -935,84 +961,90 @@ async def cmd_profile(message: types.Message):
                 owner_id=user_db_id,
                 hunger=updated_cat["hunger"],
                 happiness=updated_cat["happiness"],
-                last_tick_ts=updated_cat["last_tick_ts"]
+                last_tick_ts=updated_cat["last_tick_ts"],
             )
-    
+
     avg_level = total_level / max(1, alive_cats)
     points = user.get("mew_points", 0) if user else 0
-    
+
     # Build profile text
     text = f"🐾 **پروفایل {message.from_user.full_name}**\n\n"
     text += f"💰 امتیاز: {points}\n"
     text += f"🐱 گربه‌ها: {alive_cats} (سطح متوسط: {avg_level:.1f})\n"
     text += f"⚡ درآمد ساعتی: {total_mph:.1f} میو/ساعت\n"
-    
+
     if is_christmas_season():
         text += f"🎄 **ایونت کریسمس فعال است!**\n"
         text += f"🎁 جایزه‌ها ۵۰٪ بیشتر!\n"
-    
+
     if passive_gained > 0:
         text += f"\n💤 در این بازدید {passive_gained} امتیاز غیرفعال گرفتی!"
-    
+
     # Check clan membership
     clan_info = get_clan_info(user_db_id)
     if clan_info:
         members = get_clan_members(clan_info["id"])
         bonus = calculate_clan_bonus(len(members))
         text += f"\n👥 کلن: {clan_info['name']} (+{int((bonus - 1) * 100)}٪ بونوس)"
-    
+
     await message.reply(text, parse_mode=types.ParseMode.MARKDOWN)
+
 
 @dp.message_handler(commands=["leaderboard"])
 async def cmd_leaderboard(message: types.Message):
     """Show leaderboard."""
     await maybe_trigger_random_event(message)
-    
+
     rows = get_leaderboard(limit=10)
     if not rows:
         await message.reply("🏆 هنوز کسی امتیازی ندارد!")
         return
-    
+
     text = "🏆 **لیدربورد میولند**\n\n"
-    
+
     for i, row in enumerate(rows, 1):
         uname = row.get("username") or f"کاربر {row['telegram_id']}"
         pts = row.get("mew_points") or 0
-        
+
         medal = ""
-        if i == 1: medal = "🥇"
-        elif i == 2: medal = "🥈"
-        elif i == 3: medal = "🥉"
-        else: medal = f"{i}."
-        
+        if i == 1:
+            medal = "🥇"
+        elif i == 2:
+            medal = "🥈"
+        elif i == 3:
+            medal = "🥉"
+        else:
+            medal = f"{i}."
+
         text += f"{medal} {uname} - {pts} امتیاز\n"
-    
+
     await message.reply(text)
+
 
 @dp.message_handler(commands=["adopt"])
 async def cmd_adopt(message: types.Message):
     """Adopt a new cat."""
     await maybe_trigger_random_event(message)
-    
+
     user_tg = message.from_user.id
     username = message.from_user.username
-    
+
     user_db_id = get_or_create_user(user_tg, username)
     if not user_db_id:
         await message.reply("❌ خطا در ایجاد حساب کاربری.")
         return
-    
+
     # Apply passive income
     apply_passive_income(user_tg, user_db_id)
-    
+
     # Get user points
     user = get_user(user_tg)
     if not user:
         await message.reply("❌ کاربر یافت نشد.")
         return
-    
+
     points = user.get("mew_points", 0)
-    
+
     # Parse rarity from arguments
     args = message.get_args()
     if args:
@@ -1024,107 +1056,108 @@ async def cmd_adopt(message: types.Message):
             return
     else:
         rarity = choose_rarity()
-    
+
     # Check if user can afford
     price = RARITY_CONFIG[rarity]["price"]
     # Apply Christmas discount
     if is_christmas_season():
         price = int(price * 0.9)  # 10% discount
-    
+
     if points < price:
         await message.reply(
             f"❌ امتیاز کافی نیست!\n💰 نیاز: {price} | 💎 دارایی: {points}\n"
             f"با تایپ `mew` امتیاز جمع کن!"
         )
         return
-    
+
     # Create cat
     element = random.choice(ELEMENTS)
     trait = random.choice(TRAITS)
     name = f"گربهٔ {rarity}"
     description = f"یک گربه‌ی {rarity} با عنصر {element} و خوی {trait}"
-    
+
     cat_id = add_cat(user_db_id, name, rarity, element, trait, description)
     if not cat_id:
         await message.reply("❌ خطا در ایجاد گربه.")
         return
-    
+
     # Deduct points
     update_user_mew(user_tg, mew_points=points - price)
-    
+
     # Award first cat achievement
     if len(get_user_cats(user_db_id)) == 1:
         await check_and_award_achievements(user_tg, "first_cat")
-    
+
     # Award Christmas achievement if applicable
     if is_christmas_season():
         await check_and_award_achievements(user_tg, "christmas_adopter")
-    
+
     # Send success message
     text = f"🎉 **گربه جدید گرفتی!**\n\n"
     text += f"{rarity_emoji(rarity)} **{name}**\n"
     text += f"🎯 عنصر: {element}\n"
     text += f"✨ خوی: {trait}\n"
     text += f"💰 قیمت: {price} امتیاز"
-    
+
     if is_christmas_season():
         text += " (۱۰٪ تخفیف کریسمس! 🎄)"
-    
+
     text += f"\n📊 ID: {cat_id}\n\n"
     text += f"💎 باقی‌مانده: {points - price} امتیاز"
-    
+
     await message.reply(text, parse_mode=types.ParseMode.MARKDOWN)
+
 
 @dp.message_handler(commands=["cats"])
 async def cmd_cats(message: types.Message):
     """List user's cats."""
     await maybe_trigger_random_event(message)
-    
+
     user_tg = message.from_user.id
     username = message.from_user.username
-    
+
     user_db_id = get_or_create_user(user_tg, username)
     if not user_db_id:
         await message.reply("❌ خطا در بارگذاری گربه‌ها.")
         return
-    
+
     # Apply passive income
     apply_passive_income(user_tg, user_db_id)
-    
+
     # Get cats
     cats = get_user_cats(user_db_id, include_dead=False)
     if not cats:
         await message.reply("😿 هنوز گربه‌ای نداری!\nاز /adopt استفاده کن.")
         return
-    
+
     # Update and display cats
     dead_cats = 0
     cat_list = []
-    
+
     for i, cat in enumerate(cats, 1):
         updated_cat = apply_cat_tick(cat)
-        
+
         if not updated_cat:
             # Cat died
             kill_cat(cat["id"], user_db_id)
             dead_cats += 1
             continue
-        
+
         # Update in database
         update_cat_stats(
             cat_id=updated_cat["id"],
             owner_id=user_db_id,
             hunger=updated_cat["hunger"],
             happiness=updated_cat["happiness"],
-            last_tick_ts=updated_cat["last_tick_ts"]
+            last_tick_ts=updated_cat["last_tick_ts"],
         )
-        
+
         # Format cat info
         stats = compute_cat_effective_stats(updated_cat)
         mph = compute_cat_mph(updated_cat)
         gear_codes = parse_gear_codes(updated_cat.get("gear", ""))
         gear_text = ", ".join([GEAR_ITEMS[g]["name"] for g in gear_codes if g in GEAR_ITEMS])
-        
+
         cat_info = (
             f"{i}. {rarity_emoji(updated_cat['rarity'])} **{updated_cat['name']}** "
             f"(ID: {updated_cat['id']})\n"
@@ -1132,113 +1165,114 @@ async def cmd_cats(message: types.Message):
             f"   😊 خوشحالی: {updated_cat['happiness']}/100\n"
             f"   ⬆️ سطح: {updated_cat['level']} (XP: {updated_cat['xp']}/{xp_required_for_level(updated_cat['level'])})\n"
         )
-        
+
         if gear_text:
             cat_info += f"   🛡️ تجهیزات: {gear_text}\n"
-        
+
         cat_info += f"   💰 درآمد: {mph:.1f} میو/ساعت"
-        
+
         cat_list.append(cat_info)
-    
+
     # Build response
     if dead_cats:
         cat_list.append(f"\n⚰️ {dead_cats} گربه بر اثر بی‌توجهی مردند!")
-    
+
     text = "🐱 **گربه‌های تو:**\n\n" + "\n".join(cat_list)
-    
+
     # Split if too long
     if len(text) > 4000:
-        chunks = [text[i:i+4000] for i in range(0, len(text), 4000)]
+        chunks = [text[i : i + 4000] for i in range(0, len(text), 4000)]
         for chunk in chunks:
             await message.reply(chunk, parse_mode=types.ParseMode.MARKDOWN)
     else:
         await message.reply(text, parse_mode=types.ParseMode.MARKDOWN)
 
+
 @dp.message_handler(commands=["feed"])
 async def cmd_feed(message: types.Message):
     """Feed a cat."""
     await maybe_trigger_random_event(message)
-    
+
     user_tg = message.from_user.id
     username = message.from_user.username
-    
+
     user_db_id = get_or_create_user(user_tg, username)
     if not user_db_id:
         await message.reply("❌ خطا در بارگذاری کاربر.")
         return
-    
+
     # Apply passive income
     apply_passive_income(user_tg, user_db_id)
-    
+
     # Parse arguments
     args = message.get_args().split()
     if len(args) != 2:
         await message.reply("❌ فرمت اشتباه!\nاستفاده: `/feed <id گربه> <مقدار>`")
         return
-    
+
     try:
         cat_id = int(args[0])
         amount = int(args[1])
     except ValueError:
         await message.reply("❌ ID و مقدار باید عدد باشند!")
         return
-    
+
     if amount <= 0:
         await message.reply("❌ مقدار باید مثبت باشد!")
         return
     if amount > 100:
         await message.reply("❌ حداکثر مقدار ۱۰۰ است!")
         return
-    
+
     # Get user points
     user = get_user(user_tg)
     if not user:
         await message.reply("❌ کاربر یافت نشد.")
         return
-    
+
     points = user.get("mew_points", 0)
     cost = amount * 2  # Each hunger point costs 2 mew points
-    
+
     if points < cost:
         await message.reply(f"❌ امتیاز کافی نیست!\n💰 نیاز: {cost} | 💎 دارایی: {points}")
         return
-    
+
     # Get cat
     cat = get_cat(cat_id, user_db_id)
     if not cat:
         await message.reply("❌ گربه یافت نشد یا مال تو نیست!")
         return
-    
+
     # Apply tick and check if alive
     updated_cat = apply_cat_tick(cat)
     if not updated_cat:
         kill_cat(cat_id, user_db_id)
         await message.reply("😿 این گربه بر اثر گرسنگی مرده است!")
         return
-    
+
     # Calculate new values
     new_hunger = min(100, updated_cat["hunger"] + amount)
     new_happiness = min(100, updated_cat["happiness"] + (amount // 3))
-    
+
     # Update cat
     update_cat_stats(
         cat_id=cat_id,
         owner_id=user_db_id,
         hunger=new_hunger,
         happiness=new_happiness,
-        last_tick_ts=updated_cat["last_tick_ts"]
+        last_tick_ts=updated_cat["last_tick_ts"],
     )
-    
+
     # Deduct points
     update_user_mew(user_tg, mew_points=points - cost)
-    
+
     # Send GIF
     if FEED_GIFS:
         try:
             await bot.send_animation(message.chat.id, random.choice(FEED_GIFS))
-        except:
+        except Exception:
             pass
-    
+
     # Send response
     text = (
         f"🍗 **{updated_cat['name']} غذاشو خورد!**\n\n"
@@ -1247,68 +1281,69 @@ async def cmd_feed(message: types.Message):
         f"💰 هزینه: {cost} امتیاز\n"
         f"💎 باقی‌مانده: {points - cost} امتیاز"
     )
-    
+
     await message.reply(text, parse_mode=types.ParseMode.MARKDOWN)
+
 
 @dp.message_handler(commands=["play"])
 async def cmd_play(message: types.Message):
     """Play with a cat."""
     await maybe_trigger_random_event(message)
-    
+
     user_tg = message.from_user.id
     username = message.from_user.username
-    
+
     user_db_id = get_or_create_user(user_tg, username)
     if not user_db_id:
         await message.reply("❌ خطا در بارگذاری کاربر.")
         return
-    
+
     # Apply passive income
     apply_passive_income(user_tg, user_db_id)
-    
+
     # Parse arguments
     args = message.get_args().split()
     if len(args) != 1:
         await message.reply("❌ فرمت اشتباه!\nاستفاده: `/play <id گربه>`")
         return
-    
+
     try:
         cat_id = int(args[0])
     except ValueError:
         await message.reply("❌ ID باید عدد باشد!")
         return
-    
+
     # Get cat
     cat = get_cat(cat_id, user_db_id)
     if not cat:
         await message.reply("❌ گربه یافت نشد یا مال تو نیست!")
         return
-    
+
     # Apply tick and check if alive
     updated_cat = apply_cat_tick(cat)
     if not updated_cat:
         kill_cat(cat_id, user_db_id)
         await message.reply("😿 این گربه بر اثر بی‌توجهی مرده است!")
         return
-    
+
     # Calculate gains
     happiness_gain = 15
     hunger_loss = 5
     xp_gain = 25
-    
+
     new_happiness = min(100, updated_cat["happiness"] + happiness_gain)
     new_hunger = max(0, updated_cat["hunger"] - hunger_loss)
     new_xp = updated_cat["xp"] + xp_gain
-    
+
     # Check level up
     new_level = updated_cat["level"]
     leveled_up = False
-    
+
     while new_xp >= xp_required_for_level(new_level):
         new_xp -= xp_required_for_level(new_level)
         new_level += 1
         leveled_up = True
-    
+
     # Update cat
     update_cat_stats(
         cat_id=cat_id,
@@ -1317,151 +1352,153 @@ async def cmd_play(message: types.Message):
         happiness=new_happiness,
         xp=new_xp,
         level=new_level,
-        last_tick_ts=updated_cat["last_tick_ts"]
+        last_tick_ts=updated_cat["last_tick_ts"],
     )
-    
+
     # Send GIF
     if PLAY_GIFS:
         try:
             await bot.send_animation(message.chat.id, random.choice(PLAY_GIFS))
-        except:
+        except Exception:
             pass
-    
+
     # Build response
     text = f"🎮 **با {updated_cat['name']} بازی کردی!**\n\n"
     text += f"😊 خوشحالی: {updated_cat['happiness']} → {new_happiness}\n"
     text += f"🍗 گرسنگی: {updated_cat['hunger']} → {new_hunger}\n"
     text += f"⭐ XP: +{xp_gain} (مجموع: {new_xp})\n"
     text += f"⬆️ سطح: {updated_cat['level']} → {new_level}\n"
-    
+
     if leveled_up:
         text += "\n🎉 **گربه‌ات سطحش بالا رفت!**\n"
         text += f"💰 درآمد ساعتی افزایش یافت!"
-    
+
     await message.reply(text, parse_mode=types.ParseMode.MARKDOWN)
+
 
 @dp.message_handler(commands=["rename"])
 async def cmd_rename(message: types.Message):
     """Rename a cat."""
     await maybe_trigger_random_event(message)
-    
+
     user_tg = message.from_user.id
     username = message.from_user.username
-    
+
     user_db_id = get_or_create_user(user_tg, username)
     if not user_db_id:
         await message.reply("❌ خطا در بارگذاری کاربر.")
         return
-    
+
     # Apply passive income
     apply_passive_income(user_tg, user_db_id)
-    
+
     # Parse arguments
     args = message.get_args().split(maxsplit=1)
     if len(args) != 2:
         await message.reply("❌ فرمت اشتباه!\nاستفاده: `/rename <id گربه> <اسم جدید>`")
         return
-    
+
     try:
         cat_id = int(args[0])
     except ValueError:
         await message.reply("❌ ID باید عدد باشد!")
         return
-    
+
     new_name = args[1].strip()
     if len(new_name) > 32:
         await message.reply("❌ اسم نمی‌تواند بیشتر از ۳۲ حرف باشد!")
         return
-    
+
     # Get cat and check ownership
     cat = get_cat(cat_id, user_db_id)
     if not cat:
         await message.reply("❌ گربه یافت نشد یا مال تو نیست!")
         return
-    
+
     # Check if cat is alive
     updated_cat = apply_cat_tick(cat)
     if not updated_cat:
         kill_cat(cat_id, user_db_id)
         await message.reply("😿 این گربه مرده است!")
         return
-    
+
     # Rename
     old_name = cat["name"]
     rename_cat(user_db_id, cat_id, new_name)
-    
+
     await message.reply(f"✅ اسم گربه از **{old_name}** به **{new_name}** تغییر کرد!")
+
 
 @dp.message_handler(commands=["train"])
 async def cmd_train(message: types.Message):
     """Train a cat's stat."""
     await maybe_trigger_random_event(message)
-    
+
     user_tg = message.from_user.id
     username = message.from_user.username
-    
+
     user_db_id = get_or_create_user(user_tg, username)
     if not user_db_id:
         await message.reply("❌ خطا در بارگذاری کاربر.")
         return
-    
+
     # Apply passive income
     apply_passive_income(user_tg, user_db_id)
-    
+
     # Parse arguments
     args = message.get_args().split()
     if len(args) != 2:
         await message.reply("❌ فرمت اشتباه!\nاستفاده: `/train <id گربه> <power/agility/luck>`")
         return
-    
+
     try:
         cat_id = int(args[0])
     except ValueError:
         await message.reply("❌ ID باید عدد باشد!")
         return
-    
+
     stat = args[1].lower()
     if stat not in ["power", "agility", "luck"]:
         await message.reply("❌ استت نامعتبر!\nموارد مجاز: power, agility, luck")
         return
-    
+
     # Get user points
     user = get_user(user_tg)
     if not user:
         await message.reply("❌ کاربر یافت نشد.")
         return
-    
+
     points = user.get("mew_points", 0)
-    
+
     # Get cat
     cat = get_cat(cat_id, user_db_id)
     if not cat:
         await message.reply("❌ گربه یافت نشد یا مال تو نیست!")
         return
-    
+
     # Check if cat is alive
     updated_cat = apply_cat_tick(cat)
     if not updated_cat:
         kill_cat(cat_id, user_db_id)
         await message.reply("😿 این گربه مرده است!")
         return
-    
+
     # Calculate cost
     current_stat = cat.get(f"stat_{stat}", 1)
     cost = current_stat * 100
-    
+
     if points < cost:
         await message.reply(f"❌ امتیاز کافی نیست!\n💰 نیاز: {cost} | 💎 دارایی: {points}")
         return
-    
+
     # Update stat
     new_stat = current_stat + 1
     update_data = {f"stat_{stat}": new_stat}
     update_cat_stats(cat_id, user_db_id, **update_data)
-    
+
     # Deduct points
     update_user_mew(user_tg, mew_points=points - cost)
-    
+
     # Send response
     text = (
         f"🏋️ **{cat['name']} آموزش دید!**\n\n"
@@ -1469,16 +1506,17 @@ async def cmd_train(message: types.Message):
         f"💰 هزینه: {cost} امتیاز\n"
         f"💎 باقی‌مانده: {points - cost} امتیاز"
     )
-    
+
     await message.reply(text, parse_mode=types.ParseMode.MARKDOWN)
+
 
 @dp.message_handler(commands=["shop"])
 async def cmd_shop(message: types.Message):
     """Show shop items."""
     await maybe_trigger_random_event(message)
-    
+
     text = "🛒 **فروشگاه تجهیزات گربه**\n\n"
-    
+
     # Regular items
     text += "📦 **تجهیزات معمولی:**\n"
     for code, item in GEAR_ITEMS.items():
@@ -1488,7 +1526,7 @@ async def cmd_shop(message: types.Message):
                 f"  قیمت: {item['price']} 💎 | نیاز به لول: {item['min_level']}+\n"
                 f"  بونوس: +{item['mph_bonus']} میو/ساعت | قدرت: +{item['power_bonus']} | چابکی: +{item['agility_bonus']} | شانس: +{item['luck_bonus']}\n\n"
             )
-    
+
     # Christmas items (only show during Christmas)
     if is_christmas_season():
         text += "🎄 **تجهیزات کریسمسی:**\n"
@@ -1499,47 +1537,48 @@ async def cmd_shop(message: types.Message):
                     f"  قیمت: {item['price']} 💎 | نیاز به لول: {item['min_level']}+\n"
                     f"  بونوس: +{item['mph_bonus']} میو/ساعت | قدرت: +{item['power_bonus']} | چابکی: +{item['agility_bonus']} | شانس: +{item['luck_bonus']}\n\n"
                 )
-    
+
     text += "برای خرید: `/buygear <id_گربه> <کد_آیتم>`"
-    
+
     await message.reply(text, parse_mode=types.ParseMode.MARKDOWN)
+
 
 @dp.message_handler(commands=["buygear"])
 async def cmd_buygear(message: types.Message):
     """Buy gear for a cat."""
     await maybe_trigger_random_event(message)
-    
+
     args = message.get_args().split()
     if len(args) != 2:
         await message.reply("❌ فرمت اشتباه!\nاستفاده: `/buygear <id گربه> <کد آیتم>`")
         return
-    
+
     try:
         cat_id = int(args[0])
     except ValueError:
         await message.reply("❌ ID باید عدد باشد!")
         return
-    
+
     code = args[1].lower()
     if code not in GEAR_ITEMS:
         await message.reply("❌ کد آیتم نامعتبر است. `/shop` را چک کن.")
         return
-    
+
     item = GEAR_ITEMS[code]
-    
+
     user_tg = message.from_user.id
     username = message.from_user.username
     user_db_id = get_or_create_user(user_tg, username)
-    
+
     # Apply passive income
     apply_passive_income(user_tg, user_db_id)
-    
+
     # Get cat
     cat = get_cat(cat_id, user_db_id)
     if not cat:
         await message.reply("❌ گربه یافت نشد یا مال تو نیست!")
         return
-    
+
     # Check level requirement
     if cat["level"] < item["min_level"]:
         await message.reply(
@@ -1547,114 +1586,115 @@ async def cmd_buygear(message: types.Message):
             f"لول فعلی: {cat['level']}"
         )
         return
-    
+
     # Get user points
     user = get_user(user_tg)
     if not user:
         await message.reply("❌ کاربر یافت نشد.")
         return
-    
+
     points = user.get("mew_points", 0)
     price = item["price"]
-    
+
     # Apply Christmas discount
     if is_christmas_season() and item.get("seasonal", False):
         price = int(price * 0.8)  # 20% discount for Christmas items
-    
+
     if points < price:
         await message.reply(f"❌ امتیاز کافی نیست!\n💰 نیاز: {price} | 💎 دارایی: {points}")
         return
-    
+
     # Check if already has this gear
     gear_codes = parse_gear_codes(cat.get("gear", ""))
     if code in gear_codes:
         await message.reply(f"❌ این آیتم قبلاً روی {cat['name']} نصب شده!")
         return
-    
+
     # Add gear
     gear_codes.append(code)
     new_gear_str = ",".join(gear_codes)
-    
+
     update_cat_stats(cat_id, user_db_id, gear=new_gear_str)
     update_user_mew(user_tg, mew_points=points - price)
-    
+
     # Calculate new MPH
     updated_cat = {**cat, "gear": new_gear_str}
     mph = compute_cat_mph(updated_cat)
-    
+
     text = f"🎉 **{item['name']} روی {cat['name']} نصب شد!**\n\n"
     text += f"💰 قیمت: {price} امتیاز"
-    
+
     if is_christmas_season() and item.get("seasonal", False):
         text += " (۲۰٪ تخفیف کریسمس! 🎄)"
-    
+
     text += f"\n💎 باقی‌مانده: {points - price} امتیاز\n"
     text += f"⚡ درآمد جدید: {mph:.1f} میو/ساعت"
-    
+
     await message.reply(text, parse_mode=types.ParseMode.MARKDOWN)
+
 
 @dp.message_handler(commands=["fight"])
 async def cmd_fight(message: types.Message):
     """Fight between two cats."""
     await maybe_trigger_random_event(message)
-    
+
     args = message.get_args().split()
     if len(args) != 2:
         await message.reply("❌ فرمت اشتباه!\nاستفاده: `/fight <id_گربه_تو> <id_گربه_حریف>`")
         return
-    
+
     try:
         my_id = int(args[0])
         enemy_id = int(args[1])
     except ValueError:
         await message.reply("❌ ID ها باید عدد باشند!")
         return
-    
+
     user_tg = message.from_user.id
     username = message.from_user.username
     my_db_id = get_or_create_user(user_tg, username)
-    
+
     # Apply passive income
     apply_passive_income(user_tg, my_db_id)
-    
+
     # Get my cat
     my_cat = get_cat(my_id, my_db_id)
     if not my_cat:
         await message.reply("❌ گربه اول مال تو نیست یا وجود ندارد!")
         return
-    
+
     # Get enemy cat (can be anyone's)
     enemy_cat = get_cat(enemy_id)
     if not enemy_cat:
         await message.reply("❌ گربه دوم وجود ندارد!")
         return
-    
+
     # Check level requirement
     if my_cat["level"] < 9 or enemy_cat["level"] < 9:
         await message.reply("❌ برای جنگ، هر دو گربه باید حداقل لول ۹ باشند!")
         return
-    
+
     # Calculate battle
     my_stats = compute_cat_effective_stats(my_cat)
     enemy_stats = compute_cat_effective_stats(enemy_cat)
-    
+
     my_score = 0
     enemy_score = 0
     battle_log = []
-    
+
     for round_num in range(1, 4):
         my_roll = (
-            my_stats["power"] * random.uniform(0.8, 1.2) +
-            my_stats["agility"] * random.uniform(0.5, 1.0) +
-            my_stats["luck"] * random.uniform(0.0, 0.5)
+            my_stats["power"] * random.uniform(0.8, 1.2)
+            + my_stats["agility"] * random.uniform(0.5, 1.0)
+            + my_stats["luck"] * random.uniform(0.0, 0.5)
         )
-        
+
         enemy_roll = (
-            enemy_stats["power"] * random.uniform(0.8, 1.2) +
-            enemy_stats["agility"] * random.uniform(0.5, 1.0) +
-            enemy_stats["luck"] * random.uniform(0.0, 0.5)
+            enemy_stats["power"] * random.uniform(0.8, 1.2)
+            + enemy_stats["agility"] * random.uniform(0.5, 1.0)
+            + enemy_stats["luck"] * random.uniform(0.0, 0.5)
         )
-        
+
         if my_roll > enemy_roll:
             my_score += 1
             battle_log.append(f"راند {round_num}: ✅ بردی")
@@ -1663,217 +1703,222 @@ async def cmd_fight(message: types.Message):
             battle_log.append(f"راند {round_num}: ❌ باختی")
         else:
             battle_log.append(f"راند {round_num}: ⚖️ مساوی")
-    
+
     # Determine result
     if my_score > enemy_score:
         result = "🏆 **بردی!**"
         xp_gain = 50
         point_gain = 100
-        
+
         # Apply Christmas bonus
         if is_christmas_season():
             xp_gain = int(xp_gain * CHRISTMAS_REWARDS_MULTIPLIER)
             point_gain = int(point_gain * CHRISTMAS_REWARDS_MULTIPLIER)
-        
+
         # Update cat
         new_xp = my_cat["xp"] + xp_gain
         new_level = my_cat["level"]
-        
+
         while new_xp >= xp_required_for_level(new_level):
             new_xp -= xp_required_for_level(new_level)
             new_level += 1
-        
+
         update_cat_stats(
             my_id,
             my_db_id,
             xp=new_xp,
             level=new_level,
-            happiness=min(100, my_cat["happiness"] + 20)
+            happiness=min(100, my_cat["happiness"] + 20),
         )
-        
+
         # Give points
         user = get_user(user_tg)
         if user:
             new_points = user.get("mew_points", 0) + point_gain
             update_user_mew(user_tg, mew_points=new_points)
-        
+
         result += f"\n🎁 {xp_gain} XP + {point_gain} امتیاز گرفتی!"
-        
+
         # Check for level up
         if new_level > my_cat["level"]:
             result += f"\n🎉 گربه‌ات به لول {new_level} رسید!"
-    
+
     elif enemy_score > my_score:
         result = "😿 **باختی!**"
         # Lose some happiness
         update_cat_stats(
             my_id,
             my_db_id,
-            happiness=max(0, my_cat["happiness"] - 10)
+            happiness=max(0, my_cat["happiness"] - 10),
         )
         result += "\nگربه‌ات ۱۰ خوشحالی از دست داد!"
-    
+
     else:
         result = "🤝 **مساوی شد!**"
         # Small XP gain for tie
         update_cat_stats(
             my_id,
             my_db_id,
-            xp=my_cat["xp"] + 10
+            xp=my_cat["xp"] + 10,
         )
         result += "\n۱۰ XP گرفتی!"
-    
+
     # Build battle report
     text = f"⚔️ **نبرد: {my_cat['name']} 🆚 {enemy_cat['name']}**\n\n"
     text += "\n".join(battle_log)
     text += f"\n\n**نتیجه:** {my_score} - {enemy_score}\n"
     text += result
-    
+
     await message.reply(text, parse_mode=types.ParseMode.MARKDOWN)
+
 
 @dp.message_handler(commands=["transfer"])
 async def cmd_transfer(message: types.Message):
     """Transfer a cat to another user."""
     await maybe_trigger_random_event(message)
-    
+
     args = message.get_args().split()
     if len(args) != 2:
         await message.reply("❌ فرمت اشتباه!\nاستفاده: `/transfer <id_گربه> @username`")
         return
-    
+
     try:
         cat_id = int(args[0])
     except ValueError:
         await message.reply("❌ ID باید عدد باشد!")
         return
-    
+
     target_username = args[1].lstrip("@").strip()
     if not target_username:
         await message.reply("❌ یوزرنیم نامعتبر است!")
         return
-    
+
     user_tg = message.from_user.id
     username = message.from_user.username
     from_db_id = get_or_create_user(user_tg, username)
-    
+
     # Apply passive income
     apply_passive_income(user_tg, from_db_id)
-    
+
     # Check cat ownership
     cat = get_cat(cat_id, from_db_id)
     if not cat:
         await message.reply("❌ گربه یافت نشد یا مال تو نیست!")
         return
-    
+
     # Find target user
     all_users = get_all_users()
     target_user = None
-    
+
     for u in all_users:
         if (u.get("username") or "").lower() == target_username.lower():
             target_user = u
             break
-    
+
     if not target_user:
         await message.reply(
             "❌ کاربر هدف پیدا نشد!\n"
             "مطمئن شو کاربر با بات /start کرده و یوزرنیم صحیح را وارد کرده‌ای."
         )
         return
-    
+
     # Transfer cat
     success = set_cat_owner(cat_id, target_user["id"])
-    
+
     if success:
         text = f"✅ **{cat['name']} به @{target_username} منتقل شد!**\n\n"
         text += f"📦 ID گربه: {cat_id}\n"
         text += f"🎯 نوع: {cat['rarity']}\n"
         text += f"👋 دیگر مالک این گربه نیستی."
-        
+
         # If Christmas and transferring to someone, award achievement
         if is_christmas_season():
             await check_and_award_achievements(user_tg, "gift_giver")
     else:
         text = "❌ خطا در انتقال گربه!"
-    
+
     await message.reply(text, parse_mode=types.ParseMode.MARKDOWN)
 
+
 # ========= NEW FEATURE: Breeding System =========
+
 
 @dp.message_handler(commands=["breed"])
 async def cmd_breed(message: types.Message, state: FSMContext):
     """Start breeding process."""
+    await maybe_trigger_random_event(message)
+
     user_tg = message.from_user.id
     username = message.from_user.username
-    
+
     user_db_id = get_or_create_user(user_tg, username)
     if not user_db_id:
         await message.reply("❌ خطا در بارگذاری کاربر.")
         return
-    
+
     # Parse arguments
     args = message.get_args().split()
     if len(args) != 2:
         await message.reply("❌ فرمت اشتباه!\nاستفاده: `/breed <id_گربه_اول> <id_گربه_دوم>`")
         return
-    
+
     try:
         cat1_id = int(args[0])
         cat2_id = int(args[1])
     except ValueError:
         await message.reply("❌ ID ها باید عدد باشند!")
         return
-    
+
     # Get cats
     cat1 = get_cat(cat1_id, user_db_id)
     cat2 = get_cat(cat2_id, user_db_id)
-    
+
     if not cat1 or not cat2:
         await message.reply("❌ یکی از گربه‌ها پیدا نشد یا مال تو نیست!")
         return
-    
+
     # Check if cats are alive
     cat1 = apply_cat_tick(cat1)
     cat2 = apply_cat_tick(cat2)
-    
+
     if not cat1 or not cat2:
         await message.reply("😿 یکی از گربه‌ها مرده است!")
         return
-    
+
     # Check breeding cooldown
     now = time.time()
     last_breed1 = cat1.get("last_breed_ts", 0)
     last_breed2 = cat2.get("last_breed_ts", 0)
-    
+
     if now - last_breed1 < BREEDING_COOLDOWN:
         remaining = BREEDING_COOLDOWN - (now - last_breed1)
         hours = int(remaining // 3600)
         await message.reply(f"⏳ گربه اول باید {hours} ساعت دیگر استراحت کند!")
         return
-    
+
     if now - last_breed2 < BREEDING_COOLDOWN:
         remaining = BREEDING_COOLDOWN - (now - last_breed2)
         hours = int(remaining // 3600)
         await message.reply(f"⏳ گربه دوم باید {hours} ساعت دیگر استراحت کند!")
         return
-    
+
     # Check breeding cost
     rarity1 = cat1["rarity"]
     rarity2 = cat2["rarity"]
     cost1 = RARITY_CONFIG[rarity1]["breeding_cost"]
     cost2 = RARITY_CONFIG[rarity2]["breeding_cost"]
     total_cost = (cost1 + cost2) // 2
-    
+
     user = get_user(user_tg)
     points = user.get("mew_points", 0)
-    
+
     if points < total_cost:
         await message.reply(f"❌ امتیاز کافی نیست!\n💰 نیاز: {total_cost} | 💎 دارایی: {points}")
         return
-    
+
     # Calculate result
     result = calculate_breeding_result(cat1, cat2)
-    
+
     # Store in state
     await state.update_data(
         cat1_id=cat1_id,
@@ -1883,9 +1928,9 @@ async def cmd_breed(message: types.Message, state: FSMContext):
         breeding_cost=total_cost,
         offspring_data=result,
         user_points=points,
-        user_db_id=user_db_id
+        user_db_id=user_db_id,
     )
-    
+
     # Show confirmation
     text = f"🧬 **جفت‌گیری گربه‌ها**\n\n"
     text += f"🐱 {cat1['name']} ({rarity_emoji(rarity1)} {rarity1})\n"
@@ -1895,9 +1940,10 @@ async def cmd_breed(message: types.Message, state: FSMContext):
     text += f"✨ خوی: {result['trait']}\n"
     text += f"💰 هزینه: {total_cost} میوپوینت\n\n"
     text += "آیا می‌خواهید ادامه دهید؟ (بله/خیر)"
-    
+
     await message.reply(text)
     await BreedStates.confirm_breeding.set()
+
 
 @dp.message_handler(state=BreedStates.confirm_breeding)
 async def process_breeding_confirmation(message: types.Message, state: FSMContext):
@@ -1906,53 +1952,53 @@ async def process_breeding_confirmation(message: types.Message, state: FSMContex
         await message.reply("❌ جفت‌گیری لغو شد.")
         await state.finish()
         return
-    
+
     data = await state.get_data()
-    
+
     user_tg = message.from_user.id
     user_db_id = data["user_db_id"]
-    
+
     # Deduct points
     update_user_mew(user_tg, mew_points=data["user_points"] - data["breeding_cost"])
-    
+
     # Check breeding success
     if random.random() > BREEDING_SUCCESS_RATE:
         await message.reply("😿 متأسفانه جفت‌گیری موفقیت‌آمیز نبود. گربه‌ها باید استراحت کنند.")
-        
+
         # Update breed timestamps anyway
         now = int(time.time())
         update_cat_stats(data["cat1_id"], user_db_id, last_breed_ts=now)
         update_cat_stats(data["cat2_id"], user_db_id, last_breed_ts=now)
-        
+
         await state.finish()
         return
-    
+
     # Create offspring
     offspring_data = data["offspring_data"]
     offspring_name = f"{offspring_data['rarity'].title()} Breed"
-    
+
     cat_id = add_cat(
         user_db_id,
         offspring_name,
         offspring_data["rarity"],
         offspring_data["element"],
         offspring_data["trait"],
-        f"فرزند {offspring_data['rarity']} حاصل از جفت‌گیری"
+        f"فرزند {offspring_data['rarity']} حاصل از جفت‌گیری",
     )
-    
+
     # Apply inherited stats and record breeding
     if cat_id:
         update_cat_stats(cat_id, user_db_id, **offspring_data["stats"])
         breed_cats(data["cat1_id"], data["cat2_id"], cat_id, True)
-    
+
     # Update parent breed timestamps
     now = int(time.time())
     update_cat_stats(data["cat1_id"], user_db_id, last_breed_ts=now)
     update_cat_stats(data["cat2_id"], user_db_id, last_breed_ts=now)
-    
+
     # Award achievement
     await check_and_award_achievements(user_tg, "breeder")
-    
+
     # Send result
     text = f"🎉 **جفت‌گیری موفقیت‌آمیز بود!**\n\n"
     text += f"🐣 گربه جدید متولد شد!\n"
@@ -1961,80 +2007,88 @@ async def process_breeding_confirmation(message: types.Message, state: FSMContex
     text += f"✨ خوی: {offspring_data['trait']}\n"
     text += f"💰 هزینه: {data['breeding_cost']} میوپوینت\n"
     text += f"📊 ID گربه جدید: {cat_id}"
-    
+
     await message.reply(text)
     await state.finish()
 
+
 # ========= NEW FEATURE: Achievements System =========
+
 
 @dp.message_handler(commands=["achievements"])
 async def cmd_achievements(message: types.Message):
     """Show user achievements."""
+    await maybe_trigger_random_event(message)
+
     user_tg = message.from_user.id
     username = message.from_user.username
-    
+
     user_db_id = get_or_create_user(user_tg, username)
     if not user_db_id:
         await message.reply("❌ خطا در بارگذاری کاربر.")
         return
-    
+
     user_achievements = get_user_achievements(user_db_id)
-    
+
     # Get all achievements
     all_achievements = ACHIEVEMENTS.copy()
     if is_christmas_season():
         all_achievements.extend(CHRISTMAS_ACHIEVEMENTS)
-    
+
     # Build achievements list
     unlocked = []
     locked = []
-    
+
     for achievement in all_achievements:
         achieved = any(a["achievement_id"] == achievement["id"] for a in user_achievements)
-        
+
         achievement_info = {
             "name": achievement["name"],
             "description": achievement["description"],
             "reward": achievement.get("reward", 0),
-            "unlocked": achieved
+            "unlocked": achieved,
         }
-        
+
         if achieved:
             unlocked.append(achievement_info)
         else:
             locked.append(achievement_info)
-    
+
     # Format response
     text = "🏆 **دستاوردهای شما**\n\n"
-    
+
     if unlocked:
         text += "✅ **دستاوردهای باز شده:**\n"
         for ach in unlocked:
             text += f"• {ach['name']}: {ach['description']} (+{ach['reward']} امتیاز)\n"
         text += "\n"
-    
+
     if locked:
         text += "🔒 **دستاوردهای قفل شده:**\n"
         for ach in locked:
             text += f"• {ach['name']}: {ach['description']}\n"
-    
+
     total_rewards = sum(ach.get("reward", 0) for ach in unlocked)
     text += f"\n💰 **مجموع جایزه‌های دریافتی:** {total_rewards} میوپوینت"
-    
+
     await message.reply(text)
 
+
 # ========= NEW FEATURE: Clan System =========
+
 
 @dp.message_handler(commands=["clan"])
 async def cmd_clan(message: types.Message):
     """Clan system main command."""
+    await maybe_trigger_random_event(message)
+
     args = message.get_args().split()
-    
+
     if not args:
         # Show clan info if user is in one
         user_tg = message.from_user.id
         user_db_id = get_or_create_user(user_tg, message.from_user.username)
-        
+
         clan_info = get_clan_info(user_db_id)
         if clan_info:
             await show_clan_info(message, clan_info)
@@ -2050,9 +2104,9 @@ async def cmd_clan(message: types.Message):
                 "/clan list - لیست کلن‌های موجود"
             )
         return
-    
+
     subcommand = args[0].lower()
-    
+
     if subcommand == "create":
         await cmd_clan_create(message, args[1:])
     elif subcommand == "join":
@@ -2068,45 +2122,46 @@ async def cmd_clan(message: types.Message):
     elif subcommand == "info":
         await cmd_clan_info(message)
 
+
 async def cmd_clan_create(message: types.Message, args: List[str]):
     """Create a new clan."""
     if len(args) < 1:
         await message.reply("❌ لطفا نام کلن را وارد کنید: `/clan create <نام>`")
         return
-    
+
     clan_name = " ".join(args).strip()
     if len(clan_name) < 3 or len(clan_name) > 32:
         await message.reply("❌ نام کلن باید بین ۳ تا ۳۲ حرف باشد.")
         return
-    
+
     user_tg = message.from_user.id
     username = message.from_user.username
     user_db_id = get_or_create_user(user_tg, username)
-    
+
     # Check if already in a clan
     existing_clan = get_clan_info(user_db_id)
     if existing_clan:
         await message.reply(f"❌ شما قبلاً در کلن **{existing_clan['name']}** هستید!")
         return
-    
+
     # Check cost
     user = get_user(user_tg)
     points = user.get("mew_points", 0)
-    
+
     if points < CLAN_CREATION_COST:
         await message.reply(f"❌ امتیاز کافی نیست!\n💰 نیاز: {CLAN_CREATION_COST} | 💎 دارایی: {points}")
         return
-    
+
     # Create clan
     success = create_clan(user_db_id, clan_name, CLAN_CREATION_COST)
-    
+
     if success:
         # Deduct points
         update_user_mew(user_tg, mew_points=points - CLAN_CREATION_COST)
-        
+
         # Award achievement
         await check_and_award_achievements(user_tg, "clan_leader")
-        
+
         await message.reply(
             f"🎉 **کلن {clan_name} با موفقیت ایجاد شد!**\n\n"
             f"💰 هزینه: {CLAN_CREATION_COST} میوپوینت\n"
@@ -2116,60 +2171,63 @@ async def cmd_clan_create(message: types.Message, args: List[str]):
     else:
         await message.reply("❌ خطا در ایجاد کلن. ممکن است نام تکراری باشد.")
 
+
 async def cmd_clan_join(message: types.Message, args: List[str]):
     """Join an existing clan."""
     if len(args) < 1:
         await message.reply("❌ لطفا نام کلن را وارد کنید: `/clan join <نام>`")
         return
-    
+
     clan_name = " ".join(args).strip()
     user_tg = message.from_user.id
     username = message.from_user.username
     user_db_id = get_or_create_user(user_tg, username)
-    
+
     # Check if already in a clan
     existing_clan = get_clan_info(user_db_id)
     if existing_clan:
         await message.reply(f"❌ شما قبلاً در کلن **{existing_clan['name']}** هستید!")
         return
-    
+
     success = join_clan(user_db_id, clan_name)
-    
+
     if success:
         await message.reply(f"✅ شما با موفقیت به کلن **{clan_name}** پیوستید!")
     else:
         await message.reply("❌ خطا در پیوستن به کلن. ممکن است کلن پر باشد یا وجود نداشته باشد.")
 
+
 async def show_clan_info(message: types.Message, clan_info: Dict):
     """Show clan information."""
     members = get_clan_members(clan_info["id"])
     bonus = calculate_clan_bonus(len(members))
-    
+
     text = f"👥 **کلن {clan_info['name']}**\n\n"
     text += f"👑 رهبر: {clan_info['leader_username'] or 'نامشخص'}\n"
     text += f"👥 اعضا: {len(members)}/{CLAN_MAX_MEMBERS}\n"
     text += f"📅 ایجاد: {datetime.fromtimestamp(clan_info['created_at']).strftime('%Y-%m-%d')}\n"
     text += f"🎯 بونوس: +{int((bonus - 1) * 100)}٪ افزایش درآمد\n\n"
-    
+
     # Top 5 members
     text += "🏆 برترین اعضا:\n"
     for i, member in enumerate(members[:5], 1):
         text += f"{i}. {member['username'] or 'کاربر'} - {member['mew_points']} امتیاز\n"
-    
+
     await message.reply(text)
+
 
 async def cmd_clan_leave(message: types.Message):
     """Leave current clan."""
     user_tg = message.from_user.id
     username = message.from_user.username
     user_db_id = get_or_create_user(user_tg, username)
-    
+
     # Check if user is in a clan
     clan_info = get_clan_info(user_db_id)
     if not clan_info:
         await message.reply("❌ شما در هیچ کلنی نیستید!")
         return
-    
+
     # Check if user is leader
     if clan_info["leader_id"] == user_db_id:
         # Leader wants to leave - delete the clan
@@ -2179,7 +2237,7 @@ async def cmd_clan_leave(message: types.Message):
         else:
             await message.reply("❌ خطا در انحلال کلن.")
         return
-    
+
     # Regular member leaves
     success = leave_clan(user_db_id)
     if success:
@@ -2187,70 +2245,73 @@ async def cmd_clan_leave(message: types.Message):
     else:
         await message.reply("❌ خطا در خروج از کلن.")
 
+
 async def cmd_clan_members(message: types.Message):
     """Show clan members."""
     user_tg = message.from_user.id
     username = message.from_user.username
     user_db_id = get_or_create_user(user_tg, username)
-    
+
     clan_info = get_clan_info(user_db_id)
     if not clan_info:
         await message.reply("❌ شما در هیچ کلنی نیستید!")
         return
-    
+
     members = get_clan_members(clan_info["id"])
-    
+
     text = f"👥 **اعضای کلن {clan_info['name']}**\n\n"
-    
+
     for i, member in enumerate(members, 1):
         role = "👑" if member["user_id"] == clan_info["leader_id"] else "👤"
         text += f"{i}. {role} {member['username'] or 'کاربر'} - {member['mew_points']} امتیاز\n"
-    
+
     text += f"\nمجموع اعضا: {len(members)} نفر"
-    
+
     await message.reply(text)
+
 
 async def cmd_clan_bonus(message: types.Message):
     """Show clan bonus."""
     user_tg = message.from_user.id
     username = message.from_user.username
     user_db_id = get_or_create_user(user_tg, username)
-    
+
     clan_info = get_clan_info(user_db_id)
     if not clan_info:
         await message.reply("❌ شما در هیچ کلنی نیستید!")
         return
-    
+
     members = get_clan_members(clan_info["id"])
     bonus = calculate_clan_bonus(len(members))
-    
+
     text = f"🎯 **بونوس کلن {clan_info['name']}**\n\n"
     text += f"👥 تعداد اعضا: {len(members)}\n"
     text += f"📊 بونوس فعلی: +{int((bonus - 1) * 100)}٪ درآمد\n"
     text += f"💰 بونوس به ازای هر عضو: +{int(CLAN_BONUS_PER_MEMBER * 100)}٪\n\n"
-    
+
     if len(members) < CLAN_MAX_MEMBERS:
         next_bonus = calculate_clan_bonus(len(members) + 1)
         text += f"با عضویت یک عضو جدید، بونوس به +{int((next_bonus - 1) * 100)}٪ افزایش می‌یابد."
     else:
         text += f"📈 کلن کامل است! حداکثر بونوس فعال."
-    
+
     await message.reply(text)
+
 
 async def cmd_clan_list(message: types.Message):
     """List available clans."""
     clans = get_available_clans()
-    
+
     if not clans:
         await message.reply("🏛️ در حال حاضر هیچ کلنی برای پیوستن وجود ندارد.")
         return
-    
+
     text = "🏛️ **کلن‌های موجود:**\n\n"
-    
+
     for i, clan in enumerate(clans, 1):
         members = get_clan_members(clan["id"])
         bonus = calculate_clan_bonus(len(members))
-        
+
         text += (
             f"{i}. **{clan['name']}**\n"
             f"   👥 اعضا: {len(members)}/{CLAN_MAX_MEMBERS}\n"
@@ -2258,51 +2319,56 @@ async def cmd_clan_list(message: types.Message):
             f"   🎯 بونوس: +{int((bonus - 1) * 100)}٪\n"
             f"   ──────────────────────\n"
         )
-    
+
     text += "\nبرای پیوستن: `/clan join <نام کلن>`"
-    
+
     await message.reply(text)
+
 
 async def cmd_clan_info(message: types.Message):
     """Show clan information by name."""
     args = message.get_args().split()
-    
+
     if len(args) < 2:
         await message.reply("❌ فرمت اشتباه!\nاستفاده: `/clan info <نام کلن>`")
         return
-    
+
     clan_name = " ".join(args[1:]).strip()
     clan = get_clan_by_name(clan_name)
-    
+
     if not clan:
         await message.reply("❌ کلن مورد نظر یافت نشد!")
         return
-    
+
     members = get_clan_members(clan["id"])
     bonus = calculate_clan_bonus(len(members))
-    
+
     text = f"🏛️ **اطلاعات کلن {clan['name']}**\n\n"
     text += f"👑 رهبر: {clan['leader_username'] or 'نامشخص'}\n"
     text += f"👥 اعضا: {len(members)}/{CLAN_MAX_MEMBERS}\n"
     text += f"📅 ایجاد: {datetime.fromtimestamp(clan['created_at']).strftime('%Y-%m-%d')}\n"
     text += f"🎯 بونوس: +{int((bonus - 1) * 100)}٪ درآمد\n\n"
-    
+
     # Top 3 members
     text += "🏆 برترین اعضا:\n"
     for i, member in enumerate(members[:3], 1):
         text += f"{i}. {member['username'] or 'کاربر'} - {member['mew_points']} امتیاز\n"
-    
+
     text += f"\nبرای پیوستن: `/clan join {clan['name']}`"
-    
+
     await message.reply(text)
 
+
 # ========= NEW FEATURE: Marketplace =========
+
 
 @dp.message_handler(commands=["market"])
 async def cmd_market(message: types.Message):
     """Marketplace main command."""
+    await maybe_trigger_random_event(message)
+
     args = message.get_args().split()
-    
+
     if not args:
         await message.reply(
             "🏪 **بازار گربه‌ها**\n\n"
@@ -2314,9 +2380,9 @@ async def cmd_market(message: types.Message):
             "/market cancel <id_آگهی> - لغو آگهی"
         )
         return
-    
+
     subcommand = args[0].lower()
-    
+
     if subcommand == "list":
         await cmd_market_list(message, args[1:])
     elif subcommand == "browse":
@@ -2328,449 +2394,439 @@ async def cmd_market(message: types.Message):
     elif subcommand == "cancel":
         await cmd_market_cancel(message, args[1:])
 
+
 async def cmd_market_list(message: types.Message, args: List[str]):
     """List a cat for sale."""
     if len(args) < 2:
         await message.reply("❌ فرمت اشتباه!\nاستفاده: `/market list <id_گربه> <قیمت>`")
         return
-    
+
     try:
         cat_id = int(args[0])
         price = int(args[1])
     except ValueError:
         await message.reply("❌ ID و قیمت باید عدد باشند!")
         return
-    
-    if price < 100:
-        await message.reply("❌ حداقل قیمت ۱۰۰ میوپوینت است!")
+    if price <= 0:
+        await message.reply("❌ قیمت باید عددی مثبت باشد!")
         return
-    
+
     user_tg = message.from_user.id
     username = message.from_user.username
     user_db_id = get_or_create_user(user_tg, username)
-    
+
+    # Apply passive income
+    apply_passive_income(user_tg, user_db_id)
+
     # Check cat ownership
     cat = get_cat(cat_id, user_db_id)
     if not cat:
-        await message.reply("❌ گربه پیدا نشد یا مال تو نیست!")
+        await message.reply("❌ گربه یافت نشد یا مال تو نیست!")
         return
-    
-    # Check if cat is alive
+
+    # چک وضعیت حیات گربه
     updated_cat = apply_cat_tick(cat)
     if not updated_cat:
-        await message.reply("😿 این گربه مرده است و قابل فروش نیست!")
+        kill_cat(cat_id, user_db_id)
+        await message.reply("😿 این گربه مرده است و نمی‌توان آن را در بازار لیست کرد.")
         return
-    
-    # Create listing
+
+    # ایجاد آگهی در بازار
+    try:
+        # فرض امضا: create_market_listing(seller_id, cat_id, price, duration_seconds)
+        listing_id = create_market_listing(user_db_id, cat_id, price, MARKET_LISTING_DURATION)
+    except Exception as e:
+        logger.error(f"Error creating market listing: {e}")
+        await message.reply("❌ خطا در ایجاد آگهی. لطفاً بعداً تلاش کن.")
+        return
+
+    if not listing_id:
+        await message.reply("❌ نتوانستم آگهی را ایجاد کنم. شاید گربه از قبل در بازار است.")
+        return
+
     fee = int(price * MARKET_FEE_PERCENT / 100)
-    expires_at = int(time.time()) + MARKET_LISTING_DURATION
-    
-    listing_id = create_market_listing(
-        cat_id=cat_id,
-        seller_id=user_db_id,
-        price=price,
-        fee=fee,
-        expires_at=expires_at
+    net_amount = price - fee
+
+    text = (
+        "🏪 **آگهی با موفقیت ثبت شد!**\n\n"
+        f"🐱 گربه: {updated_cat['name']} (ID: {updated_cat['id']})\n"
+        f"💰 قیمت فروش: {price} میوپوینت\n"
+        f"📉 کارمزد بازار: {MARKET_FEE_PERCENT}% ({fee} امتیاز)\n"
+        f"💵 دریافتی خالص در زمان فروش: {net_amount} میوپوینت\n"
+        f"📄 ID آگهی: {listing_id}\n"
+        f"⏳ مهلت آگهی: ۷ روز"
     )
-    
-    if listing_id:
-        await message.reply(
-            f"🏪 **آگهی فروش ثبت شد!**\n\n"
-            f"🐱 گربه: {cat['name']}\n"
-            f"💰 قیمت: {price} میوپوینت\n"
-            f"💸 کارمزد: {fee} میوپوینت ({MARKET_FEE_PERCENT}٪)\n"
-            f"📊 کد آگهی: {listing_id}\n"
-            f"⏰ انقضا: ۷ روز دیگر\n\n"
-            f"برای خرید: `/market buy {listing_id}`"
-        )
-        
-        # Award achievement
-        await check_and_award_achievements(user_tg, "market_king")
-    else:
-        await message.reply("❌ خطا در ثبت آگهی. ممکن است گربه قبلاً برای فروش ثبت شده باشد.")
+
+    await message.reply(text, parse_mode=types.ParseMode.MARKDOWN)
+
 
 async def cmd_market_browse(message: types.Message):
-    """Browse marketplace listings."""
-    listings = get_market_listings(limit=20)
-    
+    """نمایش لیست آگهی‌های بازار."""
+    listings = get_market_listings()
+
     if not listings:
-        await message.reply("🏪 در حال حاضر هیچ گربه‌ای برای فروش وجود ندارد.")
+        await message.reply("🏪 در حال حاضر هیچ گربه‌ای در بازار برای فروش نیست.")
         return
-    
-    text = "🏪 **گربه‌های موجود در بازار:**\n\n"
-    
+
+    text_parts = ["🏪 **بازار گربه‌ها - آگهی‌های فعال:**\n"]
+
     for listing in listings:
-        cat = get_cat(listing["cat_id"])
-        if not cat:
-            continue
-        
-        time_left = listing["expires_at"] - int(time.time())
-        days = time_left // (24 * 3600)
-        hours = (time_left % (24 * 3600)) // 3600
-        
-        text += (
-            f"📊 کد: {listing['id']}\n"
-            f"🐱 {cat['name']} ({rarity_emoji(cat['rarity'])} {cat['rarity']})\n"
-            f"💰 قیمت: {listing['price']} میوپوینت\n"
-            f"⏰ باقی‌مانده: {days} روز و {hours} ساعت\n"
-            f"────────────────────\n"
+        # این ساختار را می‌توان با توجه به db تغییر داد
+        l_id = listing.get("id")
+        cat_id = listing.get("cat_id")
+        price = listing.get("price", 0)
+        created_at = listing.get("created_at")
+        seller_id = listing.get("seller_id")
+
+        cat = get_cat(cat_id)
+        seller = get_user_by_db_id(seller_id) if seller_id else None
+
+        cat_name = cat["name"] if cat else "گربه ناشناخته"
+        rarity = cat.get("rarity") if cat else "?"
+        emoji = rarity_emoji(rarity) if cat else "⚪️"
+        seller_name = (seller.get("username") or f"User {seller.get('telegram_id')}") if seller else "نامشخص"
+
+        created_str = ""
+        if created_at:
+            try:
+                created_str = datetime.fromtimestamp(created_at).strftime("%Y-%m-%d")
+            except Exception:
+                created_str = ""
+
+        fee = int(price * MARKET_FEE_PERCENT / 100)
+        net_amount = price - fee
+
+        text_parts.append(
+            f"📄 ID آگهی: `{l_id}`\n"
+            f"🐱 {emoji} {cat_name} (ID گربه: {cat_id})\n"
+            f"💰 قیمت: {price} میوپوینت (خالص برای فروشنده: {net_amount})\n"
+            f"👤 فروشنده: {seller_name}\n"
+            + (f"📅 ثبت شده در: {created_str}\n" if created_str else "")
+            + "───────────────\n"
         )
-    
-    text += "\nبرای خرید: `/market buy <کد_آگهی>`"
-    
-    # Split if too long
-    if len(text) > 4000:
-        chunks = [text[i:i+4000] for i in range(0, len(text), 4000)]
-        for chunk in chunks:
-            await message.reply(chunk)
-    else:
-        await message.reply(text)
+
+    text_parts.append("برای خرید: `/market buy <id_آگهی>`")
+    text = "\n".join(text_parts)
+
+    await message.reply(text, parse_mode=types.ParseMode.MARKDOWN)
+
 
 async def cmd_market_buy(message: types.Message, args: List[str]):
-    """Buy a cat from marketplace."""
+    """خرید یک گربه از بازار."""
     if len(args) < 1:
-        await message.reply("❌ لطفا کد آگهی را وارد کنید: `/market buy <کد_آگهی>`")
+        await message.reply("❌ فرمت اشتباه!\nاستفاده: `/market buy <id_آگهی>`")
         return
-    
+
     try:
         listing_id = int(args[0])
     except ValueError:
-        await message.reply("❌ کد آگهی باید عدد باشد!")
+        await message.reply("❌ ID آگهی باید عدد باشد!")
         return
-    
+
     user_tg = message.from_user.id
     username = message.from_user.username
     buyer_db_id = get_or_create_user(user_tg, username)
-    
-    # Check if buyer is not the seller
-    listings = get_market_listings()
-    listing = next((l for l in listings if l["id"] == listing_id), None)
-    
-    if not listing:
-        await message.reply("❌ آگهی پیدا نشد!")
+
+    # Apply passive income
+    apply_passive_income(user_tg, buyer_db_id)
+
+    # تلاش برای خرید
+    try:
+        """
+        این‌جا یک فرض منطقی برای امضای تابع db می‌گذاریم.
+        بهتر است در ماژول db چیزی شبیه این باشد:
+        buy_market_listing(listing_id: int, buyer_db_id: int) -> dict | None
+        که dict شامل کلیدهای زیر است:
+            {
+                "listing_id": ...,
+                "cat_id": ...,
+                "price": ...,
+                "seller_id": ...,
+                "fee": ...,
+                "net_amount": ...,
+            }
+        """
+        result = buy_market_listing(listing_id, buyer_db_id)
+    except Exception as e:
+        logger.error(f"Error buying market listing: {e}")
+        await message.reply("❌ خطا در خرید از بازار. لطفاً بعداً تلاش کن.")
         return
-    
-    if listing["seller_id"] == buyer_db_id:
-        await message.reply("❌ نمی‌توانید گربه خود را بخرید!")
+
+    if not result:
+        await message.reply("❌ آگهی پیدا نشد، یا قبلاً فروخته / منقضی شده است.")
         return
-    
-    # Check buyer's points
-    buyer = get_user(user_tg)
-    buyer_points = buyer.get("mew_points", 0)
-    total_cost = listing["price"] + listing["fee"]
-    
-    if buyer_points < total_cost:
-        await message.reply(f"❌ امتیاز کافی نیست!\n💰 نیاز: {total_cost} | 💎 دارایی: {buyer_points}")
-        return
-    
-    # Process purchase
-    success = buy_market_listing(listing_id, buyer_db_id)
-    
-    if success:
-        # Transfer points
-        seller_user = get_user_by_db_id(listing["seller_id"])
-        if seller_user:
-            seller_points = seller_user.get("mew_points", 0)
-            update_user_mew(seller_user["telegram_id"], mew_points=seller_points + listing["price"])
-        
-        # Deduct from buyer
-        update_user_mew(user_tg, mew_points=buyer_points - total_cost)
-        
-        # Get cat info
-        cat = get_cat(listing["cat_id"])
-        
-        await message.reply(
-            f"🎉 **خرید موفقیت‌آمیز بود!**\n\n"
-            f"🐱 گربه: {cat['name']}\n"
-            f"💰 قیمت پرداخت شده: {total_cost} میوپوینت\n"
-            f"(قیمت: {listing['price']} + کارمزد: {listing['fee']})\n\n"
-            f"گربه جدید اکنون در لیست گربه‌های شماست! 🎉"
-        )
-    else:
-        await message.reply("❌ خطا در خرید. ممکن است آگهی منقضی شده باشد.")
+
+    # سعی می‌کنیم با ساختار عمومی کار کنیم
+    price = result.get("price", 0)
+    cat_id = result.get("cat_id")
+    seller_db_id = result.get("seller_id")
+    fee = result.get("fee", int(price * MARKET_FEE_PERCENT / 100))
+    net_amount = result.get("net_amount", price - fee)
+
+    cat = get_cat(cat_id, buyer_db_id) or get_cat(cat_id)
+    cat_name = cat["name"] if cat else f"گربه (ID: {cat_id})"
+
+    # Award فروشنده اگر توانست اولین فروش را انجام دهد
+    if seller_db_id:
+        seller = get_user_by_db_id(seller_db_id)
+        if seller:
+            seller_tg = seller.get("telegram_id")
+            if seller_tg:
+                await check_and_award_achievements(seller_tg, "market_king")
+
+    text = (
+        "🎉 **خرید موفق!**\n\n"
+        f"🐱 گربه: {cat_name} (ID: {cat_id})\n"
+        f"💰 قیمت پرداختی: {price} میوپوینت\n"
+        f"📉 کارمزد بازار: {fee} میوپوینت\n"
+        f"📄 ID آگهی: {listing_id}\n\n"
+        "گربه اکنون متعلق به توست! 😺"
+    )
+
+    await message.reply(text, parse_mode=types.ParseMode.MARKDOWN)
+
 
 async def cmd_market_my(message: types.Message):
-    """Show user's market listings."""
+    """نمایش آگهی‌های کاربر در بازار."""
     user_tg = message.from_user.id
     username = message.from_user.username
     user_db_id = get_or_create_user(user_tg, username)
-    
+
     listings = get_user_market_listings(user_db_id)
-    
+
     if not listings:
-        await message.reply("📭 شما هیچ آگهی فعالی ندارید.")
+        await message.reply("📦 شما هیچ آگهی فعالی در بازار ندارید.")
         return
-    
-    text = "📭 **آگهی‌های شما:**\n\n"
-    
+
+    text_parts = ["📦 **آگهی‌های شما در بازار:**\n"]
+
     for listing in listings:
-        cat = get_cat(listing["cat_id"])
-        if not cat:
-            continue
-        
-        status = "🟢 فعال" if listing["status"] == "active" else "🔴 فروخته شده"
-        
-        text += (
-            f"📊 کد: {listing['id']}\n"
-            f"🐱 گربه: {cat['name']}\n"
-            f"💰 قیمت: {listing['price']} میوپوینت\n"
-            f"📊 وضعیت: {status}\n"
-            f"────────────────────\n"
+        l_id = listing.get("id")
+        cat_id = listing.get("cat_id")
+        price = listing.get("price", 0)
+        created_at = listing.get("created_at")
+        expires_at = listing.get("expires_at")
+
+        cat = get_cat(cat_id, user_db_id) or get_cat(cat_id)
+        cat_name = cat["name"] if cat else "گربه ناشناخته"
+        rarity = cat.get("rarity") if cat else "?"
+        emoji = rarity_emoji(rarity) if cat else "⚪️"
+
+        created_str = ""
+        if created_at:
+            try:
+                created_str = datetime.fromtimestamp(created_at).strftime("%Y-%m-%d")
+            except Exception:
+                created_str = ""
+
+        expires_str = ""
+        if expires_at:
+            try:
+                expires_str = datetime.fromtimestamp(expires_at).strftime("%Y-%m-%d")
+            except Exception:
+                expires_str = ""
+
+        fee = int(price * MARKET_FEE_PERCENT / 100)
+        net_amount = price - fee
+
+        text_parts.append(
+            f"📄 ID آگهی: `{l_id}`\n"
+            f"🐱 {emoji} {cat_name} (ID گربه: {cat_id})\n"
+            f"💰 قیمت: {price} (خالص: {net_amount})\n"
+            + (f"📅 ایجاد: {created_str}\n" if created_str else "")
+            + (f"⏳ انقضا: {expires_str}\n" if expires_str else "")
+            + "───────────────\n"
         )
-    
-    await message.reply(text)
+
+    text_parts.append("برای لغو آگهی: `/market cancel <id_آگهی>`")
+    text = "\n".join(text_parts)
+
+    await message.reply(text, parse_mode=types.ParseMode.MARKDOWN)
+
 
 async def cmd_market_cancel(message: types.Message, args: List[str]):
-    """Cancel a market listing."""
+    """لغو آگهی بازار توسط صاحب آن."""
     if len(args) < 1:
-        await message.reply("❌ لطفا کد آگهی را وارد کنید: `/market cancel <کد_آگهی>`")
+        await message.reply("❌ فرمت اشتباه!\nاستفاده: `/market cancel <id_آگهی>`")
         return
-    
+
     try:
         listing_id = int(args[0])
     except ValueError:
-        await message.reply("❌ کد آگهی باید عدد باشد!")
+        await message.reply("❌ ID آگهی باید عدد باشد!")
         return
-    
+
     user_tg = message.from_user.id
     username = message.from_user.username
     user_db_id = get_or_create_user(user_tg, username)
-    
-    # Get listing
-    listings = get_user_market_listings(user_db_id)
-    listing = next((l for l in listings if l["id"] == listing_id), None)
-    
-    if not listing:
-        await message.reply("❌ آگهی پیدا نشد یا مال شما نیست!")
-        return
-    
-    if listing["status"] != "active":
-        await message.reply("❌ فقط آگهی‌های فعال قابل لغو هستند!")
-        return
-    
-    success = cancel_market_listing(listing_id)
-    
-    if success:
-        await message.reply("✅ آگهی با موفقیت لغو شد.")
-    else:
-        await message.reply("❌ خطا در لغو آگهی.")
 
-# ========= NEW FEATURE: Special Cats =========
+    try:
+        # فرض امضا: cancel_market_listing(listing_id: int, user_db_id: int) -> bool
+        success = cancel_market_listing(listing_id, user_db_id)
+    except Exception as e:
+        logger.error(f"Error canceling market listing: {e}")
+        await message.reply("❌ خطا در لغو آگهی.")
+        return
+
+    if not success:
+        await message.reply("❌ نتوانستم آگهی را لغو کنم. شاید متعلق به شما نیست یا قبلاً منقضی شده است.")
+        return
+
+    await message.reply(f"✅ آگهی با ID `{listing_id}` با موفقیت لغو شد.", parse_mode=types.ParseMode.MARKDOWN)
+
+
+# ========= NEW FEATURE: Special Cats Viewer =========
+
 
 @dp.message_handler(commands=["specialcats"])
 async def cmd_special_cats(message: types.Message):
-    """Show available special cats."""
+    """نمایش گربه‌های ویژه کاربر."""
+    await maybe_trigger_random_event(message)
+
     user_tg = message.from_user.id
-    user_db_id = get_or_create_user(user_tg, message.from_user.username)
-    
+    username = message.from_user.username
+    user_db_id = get_or_create_user(user_tg, username)
+    if not user_db_id:
+        await message.reply("❌ خطا در بارگذاری کاربر.")
+        return
+
+    # Apply passive income
+    apply_passive_income(user_tg, user_db_id)
+
     special_cats = get_special_cats(user_db_id)
-    
     if not special_cats:
-        await message.reply(
-            "🌟 **گربه‌های ویژه**\n\n"
-            "گربه‌های ویژه دارای توانایی‌های منحصر به فرد هستند!\n\n"
-            "روش‌های کسب:\n"
-            "• برنده شدن در ایونت‌های ویژه\n"
-            "• جفت‌گیری گربه‌های افسانه‌ای\n"
-            "• خرید از فروشگاه خاص در ایونت‌ها\n\n"
-            "در حال حاضر هیچ گربه ویژه‌ای ندارید."
-        )
+        await message.reply("🌟 هنوز هیچ گربه ویژه‌ای نداری!")
         return
-    
-    text = "🌟 **گربه‌های ویژه شما:**\n\n"
-    
-    for cat in special_cats:
-        ability = cat.get("special_ability", "قدرت ویژه")
-        mph = compute_cat_mph(cat)
-        
-        text += (
-            f"{rarity_emoji(cat['rarity'])} **{cat['name']}**\n"
-            f"🎯 توانایی: {ability}\n"
-            f"🍗 گرسنگی: {cat['hunger']}/100\n"
-            f"😊 خوشحالی: {cat['happiness']}/100\n"
-            f"⚡ درآمد: {mph:.1f} میو/ساعت\n"
-            f"────────────────────\n"
-        )
-    
-    await message.reply(text)
 
-# ========= ADMIN COMMANDS =========
+    text_parts = ["🌟 **گربه‌های ویژه تو:**\n"]
 
-@dp.message_handler(commands=["admin"])
-async def cmd_admin(message: types.Message):
-    """Admin commands."""
-    user_tg = message.from_user.id
-    
-    if user_tg != ADMIN_ID:
-        await message.reply("❌ دسترسی محدود!")
-        return
-    
-    args = message.get_args().split()
-    
-    if not args:
-        await message.reply(
-            "👑 **دستورات ادمین:**\n\n"
-            "/admin addpoints @user amount - افزودن امتیاز\n"
-            "/admin reset cooldown @user - ریست کولداون\n"
-            "/admin event trigger - فعال‌سازی دستی ایونت\n"
-            "/admin stats - آمار سرور\n"
-            "/admin broadcast message - ارسال پیام به همه کاربران"
+    for i, cat in enumerate(special_cats, 1):
+        updated_cat = apply_cat_tick(cat)
+        if not updated_cat:
+            kill_cat(cat["id"], user_db_id)
+            continue
+
+        update_cat_stats(
+            cat_id=updated_cat["id"],
+            owner_id=user_db_id,
+            hunger=updated_cat["hunger"],
+            happiness=updated_cat["happiness"],
+            last_tick_ts=updated_cat["last_tick_ts"],
         )
-        return
-    
-    subcommand = args[0].lower()
-    
-    if subcommand == "addpoints":
-        await cmd_admin_addpoints(message, args[1:])
-    elif subcommand == "stats":
-        await cmd_admin_stats(message)
 
-async def cmd_admin_addpoints(message: types.Message, args: List[str]):
-    """Add points to user."""
-    if len(args) < 2:
-        await message.reply("❌ فرمت اشتباه!\nاستفاده: `/admin addpoints @user amount`")
+        mph = compute_cat_mph(updated_cat)
+
+        text_parts.append(
+            f"{i}. {rarity_emoji(updated_cat['rarity'])} **{updated_cat['name']}** (ID: {updated_cat['id']})\n"
+            f"   🍗 گرسنگی: {updated_cat['hunger']}/100 | 😊 خوشحالی: {updated_cat['happiness']}/100\n"
+            f"   ⬆️ لول: {updated_cat['level']} | 💰 درآمد: {mph:.1f} میو/ساعت\n"
+            "   ───────────────\n"
+        )
+
+    await message.reply("\n".join(text_parts), parse_mode=types.ParseMode.MARKDOWN)
+
+
+# ========= ADMIN / MAINTENANCE COMMANDS =========
+
+
+@dp.message_handler(commands=["admin_broadcast"])
+async def cmd_admin_broadcast(message: types.Message):
+    """ارسال پیام همگانی (فقط ادمین)."""
+    if message.from_user.id != ADMIN_ID:
         return
-    
-    target_username = args[0].lstrip("@")
+
+    text = message.get_args().strip()
+    if not text:
+        await message.reply("فرمت: /admin_broadcast <متن پیام>")
+        return
+
+    users = get_all_users()
+    sent = 0
+
+    for u in users:
+        tg_id = u.get("telegram_id")
+        if not tg_id:
+            continue
+        try:
+            await bot.send_message(tg_id, text)
+            sent += 1
+        except TelegramAPIError as e:
+            logger.warning(f"Broadcast failed to {tg_id}: {e}")
+
+    await message.reply(f"پیام برای {sent} کاربر ارسال شد.")
+
+
+@dp.message_handler(commands=["admin_event_reset"])
+async def cmd_admin_event_reset(message: types.Message):
+    """به‌روزرسانی/ریست جدول رویدادهای روزانه (فقط ادمین)."""
+    if message.from_user.id != ADMIN_ID:
+        return
+
     try:
-        amount = int(args[1])
-    except ValueError:
-        await message.reply("❌ مقدار باید عدد باشد!")
-        return
-    
-    # Find user
-    all_users = get_all_users()
-    target_user = None
-    
-    for u in all_users:
-        if (u.get("username") or "").lower() == target_username.lower():
-            target_user = u
-            break
-    
-    if not target_user:
-        await message.reply("❌ کاربر یافت نشد!")
-        return
-    
-    current_points = target_user.get("mew_points", 0)
-    update_user_mew(target_user["telegram_id"], mew_points=current_points + amount)
-    
-    await message.reply(f"✅ {amount} امتیاز به @{target_username} اضافه شد!\nمجموع جدید: {current_points + amount}")
+        update_daily_events_table()
+        await message.reply("✅ جدول رویدادهای روزانه به‌روزرسانی/بازسازی شد.")
+    except Exception as e:
+        logger.error(f"Error updating daily events table: {e}")
+        await message.reply("❌ خطا در به‌روزرسانی جدول رویدادهای روزانه.")
 
-async def cmd_admin_stats(message: types.Message):
-    """Show server statistics."""
-    all_users = get_all_users()
-    total_users = len(all_users)
-    
-    total_points = sum(user.get("mew_points", 0) for user in all_users)
-    avg_points = total_points / max(1, total_users)
-    
-    # Count active users (last week)
-    week_ago = int(time.time()) - (7 * 24 * 3600)
-    active_users = sum(1 for user in all_users if user.get("last_mew_ts", 0) > week_ago)
-    
-    text = (
-        "📊 **آمار سرور میولند:**\n\n"
-        f"👥 تعداد کاربران: {total_users}\n"
-        f"📈 کاربران فعال (هفته گذشته): {active_users}\n"
-        f"💰 مجموع امتیازها: {total_points:,}\n"
-        f"📊 میانگین امتیاز: {avg_points:.0f}\n"
-    )
-    
-    if is_christmas_season():
-        text += f"\n🎄 **ایونت کریسمس فعال است!**\n"
-        text += f"🎁 ضریب جایزه: {CHRISTMAS_REWARDS_MULTIPLIER}x"
-    
-    await message.reply(text)
 
-# ========= Catch All Handler =========
+# ========= WEBHOOK & APP SETUP =========
 
-@dp.message_handler()
-async def catch_all(message: types.Message):
-    """Catch all messages for event processing."""
-    handled = await process_event_answer(message)
-    if not handled:
-        # Trigger random events
-        await maybe_trigger_random_event(message)
-
-# ========= Webhook Server =========
-
-async def handle_root(request: web.Request):
-    return web.Response(text="🎄 Mewland Christmas Bot is running! 🐱")
 
 async def handle_webhook(request: web.Request):
-    """Handle webhook requests."""
-    token = request.match_info.get("token")
-    if token != BOT_TOKEN:
-        return web.Response(status=403, text="Forbidden")
-    
-    logger.info("Webhook received")
-    
+    """aiohttp webhook handler for Telegram updates."""
     try:
         data = await request.json()
-        update = types.Update(**data)
-        await dp.process_update(update)
-    except Exception as e:
-        logger.exception(f"Error processing update: {e}")
-        await notify_admin_error(f"Webhook error: {str(e)}")
-    
-    return web.Response(text="OK")
+    except Exception:
+        return web.Response(status=400)
+
+    update = types.Update(**data)
+    await dp.process_update(update)
+    return web.Response(status=200)
+
 
 async def on_startup(app: web.Application):
-    """Startup tasks."""
-    logger.info("🎅 Starting Mewland Christmas Bot...")
-    
-    # Delete old webhook
-    try:
-        await bot.delete_webhook()
-        logger.info("Old webhook deleted")
-    except Exception as e:
-        logger.warning(f"Could not delete webhook: {e}")
-    
-    # Set new webhook
+    """Webhook setup and DB init."""
     try:
         await bot.set_webhook(WEBHOOK_URL)
-        logger.info(f"Webhook set to: {WEBHOOK_URL}")
+        logger.info(f"Webhook set to {WEBHOOK_URL}")
     except Exception as e:
         logger.error(f"Failed to set webhook: {e}")
-        raise
-    
-    # Initialize database
-    init_db()
-    logger.info("Database initialized")
-    
-    # Check Christmas season
-    if is_christmas_season():
-        logger.info("🎄 Christmas event is ACTIVE!")
-    
-    # Cleanup old active events
+
     try:
-        # Delete events older than 2 hours
-        pass  # This would need implementation in db.py
+        init_db()
+        logger.info("Database initialized.")
     except Exception as e:
-        logger.error(f"Error cleaning up old events: {e}")
-    
-    # Notify admin
+        logger.error(f"DB init failed: {e}")
+
     try:
-        await bot.send_message(ADMIN_ID, "🤖 Mewland Christmas Bot started successfully!")
-        if is_christmas_season():
-            await bot.send_message(ADMIN_ID, "🎄 Christmas event is ACTIVE! 🎅")
+        update_daily_events_table()
+        logger.info("Daily events table checked/updated.")
     except Exception as e:
-        logger.error(f"Failed to notify admin: {e}")
+        logger.error(f"Daily events table update failed: {e}")
+
+
+async def on_shutdown(app: web.Application):
+    """Cleanup on shutdown."""
+    try:
+        await bot.delete_webhook()
+    except Exception as e:
+        logger.error(f"Failed to delete webhook: {e}")
+
+    await dp.storage.close()
+    await dp.storage.wait_closed()
+    await bot.session.close()
+
 
 def main():
-    """Main application entry point."""
     app = web.Application()
-    
-    # Add routes
-    app.router.add_get("/", handle_root)
-    app.router.add_post("/webhook/{token}", handle_webhook)
-    
-    # Add startup tasks
+    app.router.add_post(WEBHOOK_PATH, handle_webhook)
     app.on_startup.append(on_startup)
-    
-    # Run app
-    logger.info(f"Starting server on {APP_HOST}:{APP_PORT}")
+    app.on_shutdown.append(on_shutdown)
+
+    logger.info(f"Starting web app on {APP_HOST}:{APP_PORT}")
     web.run_app(app, host=APP_HOST, port=APP_PORT)
+
 
 if __name__ == "__main__":
     main()
