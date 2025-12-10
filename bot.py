@@ -75,38 +75,15 @@ APP_HOST = "0.0.0.0"
 APP_PORT = int(os.getenv("PORT", "10000"))
 
 # Redis configuration for Render
-REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379")
+from aiogram.contrib.fsm_storage.memory import MemoryStorage
 
-# Initialize bot with Redis storage
-try:
-    if REDIS_URL:
-        from urllib.parse import urlparse
 
-        url = urlparse(REDIS_URL)
-        # RedisStorage2 does NOT take ssl param; it uses redis-py internally
-        storage = RedisStorage2(
-            host=url.hostname,
-            port=url.port or 6379,
-            db=int(url.path.lstrip("/")) if url.path else 0,
-            password=url.password,
-        )
-        logger.info(
-            f"Redis storage initialized successfully at {url.hostname}:{url.port or 6379}, db={int(url.path.lstrip('/') or 0)}"
-        )
-    else:
-        from aiogram.contrib.fsm_storage.memory import MemoryStorage
-
-        storage = MemoryStorage()
-        logger.warning("Using MemoryStorage (REDIS_URL not set) – not suitable for production!")
-except Exception as e:
-    logger.error(f"Failed to initialize Redis: {e}")
-    from aiogram.contrib.fsm_storage.memory import MemoryStorage
-
-    storage = MemoryStorage()
-    logger.warning("Falling back to MemoryStorage due to Redis error")
+storage = MemoryStorage()
+logger.warning("Using MemoryStorage (Redis disabled / no external Redis configured).")
 
 bot = Bot(BOT_TOKEN, parse_mode=types.ParseMode.HTML)
 dp = Dispatcher(bot, storage=storage)
+
 
 # ========= State Machines =========
 
