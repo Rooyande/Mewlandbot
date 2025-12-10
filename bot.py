@@ -2083,6 +2083,7 @@ async def cmd_achievements(message: types.Message):
 @dp.message_handler(commands=["clan"])
 async def cmd_clan(message: types.Message):
     """Clan system main command."""
+    logger.info(f"/clan received from {message.from_user.id}: {message.text!r}")
     await maybe_trigger_random_event(message)
 
     args = message.get_args().split()
