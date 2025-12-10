@@ -1496,6 +1496,24 @@ async def cmd_train(message: types.Message):
     await message.reply(text, parse_mode=types.ParseMode.MARKDOWN)
 
 
+@dp.message_handler()
+async def catch_all(message: types.Message):
+    # اول ببین این پیام جواب یه ایونت فعاله یا نه
+    handled = False
+    try:
+        handled = await process_event_answer(message)
+    except Exception as e:
+        logger.exception(f"Error in process_event_answer: {e}")
+
+    # اگر جواب ایونت نبود، شانس تریگر شدن ایونت جدید رو بررسی کن
+    if not handled:
+        try:
+            await maybe_trigger_random_event(message)
+        except Exception as e:
+            logger.exception(f"Error in maybe_trigger_random_event: {e}")
+
+
+
 @dp.message_handler(commands=["shop"])
 async def cmd_shop(message: types.Message):
     """Show shop items."""
