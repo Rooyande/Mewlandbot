@@ -908,6 +908,11 @@ async def handle_mew(message: types.Message):
 
     await message.reply(text, parse_mode=types.ParseMode.MARKDOWN)
 
+@dp.message_handler(commands=["clan"])
+async def cmd_clan(message: types.Message):
+    logger.info(f"/clan TEST handler reached from {message.from_user.id}: {message.text!r}")
+    await message.reply("✅ /clan handler reached! (نسخه‌ی تست ساده)")
+
 
 @dp.message_handler(commands=["profile"])
 async def cmd_profile(message: types.Message):
@@ -1947,10 +1952,6 @@ async def cmd_breed(message: types.Message, state: FSMContext):
     await message.reply(text)
     await BreedStates.confirm_breeding.set()
 
-@dp.message_handler(commands=["clan"])
-async def cmd_clan(message: types.Message):
-    logger.info(f"/clan received from {message.from_user.id}: {message.text!r}")
-    await message.reply("✅ /clan handler reached! (نسخه تست)")
 
 
 @dp.message_handler(state=BreedStates.confirm_breeding)
