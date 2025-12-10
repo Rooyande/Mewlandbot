@@ -1100,82 +1100,9 @@ async def cmd_adopt(message: types.Message):
 
 @dp.message_handler(commands=["cats"])
 async def cmd_cats(message: types.Message):
-    """List user's cats."""
-    await maybe_trigger_random_event(message)
+    logger.info(f"/cats TEST handler from {message.from_user.id}: {message.text!r}")
+    await message.reply("✅ /cats handler reached (نسخه تست).")
 
-    user_tg = message.from_user.id
-    username = message.from_user.username
-
-    user_db_id = get_or_create_user(user_tg, username)
-    if not user_db_id:
-        await message.reply("❌ خطا در بارگذاری گربه‌ها.")
-        return
-
-    # Apply passive income
-    apply_passive_income(user_tg, user_db_id)
-
-    # Get cats
-    cats = get_user_cats(user_db_id, include_dead=False)
-    if not cats:
-        await message.reply("😿 هنوز گربه‌ای نداری!\nاز /adopt استفاده کن.")
-        return
-
-    # Update and display cats
-    dead_cats = 0
-    cat_list = []
-
-    for i, cat in enumerate(cats, 1):
-        updated_cat = apply_cat_tick(cat)
-
-        if not updated_cat:
-            # Cat died
-            kill_cat(cat["id"], user_db_id)
-            dead_cats += 1
-            continue
-
-        # Update in database
-        update_cat_stats(
-            cat_id=updated_cat["id"],
-            owner_id=user_db_id,
-            hunger=updated_cat["hunger"],
-            happiness=updated_cat["happiness"],
-            last_tick_ts=updated_cat["last_tick_ts"],
-        )
-
-        # Format cat info
-        stats = compute_cat_effective_stats(updated_cat)
-        mph = compute_cat_mph(updated_cat)
-        gear_codes = parse_gear_codes(updated_cat.get("gear", ""))
-        gear_text = ", ".join([GEAR_ITEMS[g]["name"] for g in gear_codes if g in GEAR_ITEMS])
-
-        cat_info = (
-            f"{i}. {rarity_emoji(updated_cat['rarity'])} **{updated_cat['name']}** "
-            f"(ID: {updated_cat['id']})\n"
-            f"   🍗 گرسنگی: {updated_cat['hunger']}/100\n"
-            f"   😊 خوشحالی: {updated_cat['happiness']}/100\n"
-            f"   ⬆️ سطح: {updated_cat['level']} (XP: {updated_cat['xp']}/{xp_required_for_level(updated_cat['level'])})\n"
-        )
-
-        if gear_text:
-            cat_info += f"   🛡️ تجهیزات: {gear_text}\n"
-
-        cat_info += f"   💰 درآمد: {mph:.1f} میو/ساعت"
-
-        cat_list.append(cat_info)
-
-    # Build response
-    if dead_cats:
-        cat_list.append(f"\n⚰️ {dead_cats} گربه بر اثر بی‌توجهی مردند!")
-
-    text = "🐱 **گربه‌های تو:**\n\n" + "\n".join(cat_list)
-
-    # Split if too long
-    if len(text) > 4000:
-        chunks = [text[i : i + 4000] for i in range(0, len(text), 4000)]
-        for chunk in chunks:
-            await message.reply(chunk, parse_mode=types.ParseMode.MARKDOWN)
-    else:
-        await message.reply(text, parse_mode=types.ParseMode.MARKDOWN)
 
 
 @dp.message_handler(commands=["feed"])
