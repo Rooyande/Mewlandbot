@@ -695,7 +695,6 @@ async def process_event_answer(message: types.Message) -> bool:
             user = get_user(user_tg)
             current = user.get("mew_points", 0) if user else 0
             amount = reward["amount"]
-            # Apply Christmas multiplier
             if is_christmas_season():
                 amount = int(amount * CHRISTMAS_REWARDS_MULTIPLIER)
             update_user_mew(user_tg, mew_points=current + amount)
