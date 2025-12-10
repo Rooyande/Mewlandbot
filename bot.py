@@ -2777,15 +2777,28 @@ async def cmd_admin_event_reset(message: types.Message):
 
 
 async def handle_webhook(request: web.Request):
-    """aiohttp webhook handler for Telegram updates."""
+    """Safe aiohttp webhook handler for Telegram."""
     try:
         data = await request.json()
-    except Exception:
-        return web.Response(status=400)
+    except Exception as e:
+        logger.error(f"Invalid JSON in webhook: {e}")
+        return web.Response(status=400, text="Bad Request")
 
-    update = types.Update(**data)
-    await dp.process_update(update)
-    return web.Response(status=200)
+    try:
+        update = types.Update(**data)
+        await dp.process_update(update)
+    except Exception as e:
+        # اینجا از کرش شدن بات جلوگیری می‌کنیم
+        logger.exception(f"Error while processing update: {e}")
+
+        # اگر خواستی به ادمین پیام بده
+        try:
+            await notify_admin_error(f"Webhook update error:\n{e}")
+        except:
+            pass
+
+    # ❗ مهم: همیشه 200 بده تا تلگرام این آپدیت را تکرار نکند
+    return web.Response(text="OK")
 
 
 async def on_startup(app: web.Application):
