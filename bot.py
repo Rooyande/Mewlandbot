@@ -1100,8 +1100,92 @@ async def cmd_adopt(message: types.Message):
 
 @dp.message_handler(commands=["cats"])
 async def cmd_cats(message: types.Message):
-    logger.info(f"/cats TEST handler from {message.from_user.id}: {message.text!r}")
-    await message.reply("✅ /cats handler reached (نسخه تست).")
+    logger.info(f"/cats called from {message.from_user.id}: {message.text!r}")
+    try:
+        await maybe_trigger_random_event(message)
+
+        user_tg = message.from_user.id
+        username = message.from_user.username
+
+        user_db_id = get_or_create_user(user_tg, username)
+        if not user_db_id:
+            await message.reply("❌ خطا در بارگذاری گربه‌ها.")
+            return
+
+        # درآمد غیرفعال
+        apply_passive_income(user_tg, user_db_id)
+
+        # فعلاً بدون include_dead برای اینکه اگر تابع db این پارامتر رو نداشته باشه، کرش نکنه
+        cats = get_user_cats(user_db_id)
+        if not cats:
+            await message.reply("😿 هنوز گربه‌ای نداری!\nاز /adopt استفاده کن.")
+            return
+
+        dead_cats = 0
+        cat_list = []
+
+        for i, cat in enumerate(cats, 1):
+            updated_cat = apply_cat_tick(cat)
+
+            if not updated_cat:
+                # Cat died
+                try:
+                    kill_cat(cat["id"], user_db_id)
+                except Exception as e:
+                    logger.exception(f"kill_cat failed for cat_id={cat.get('id')}: {e}")
+                dead_cats += 1
+                continue
+
+            # آپدیت در دیتابیس
+            try:
+                update_cat_stats(
+                    cat_id=updated_cat["id"],
+                    owner_id=user_db_id,
+                    hunger=updated_cat.get("hunger", 100),
+                    happiness=updated_cat.get("happiness", 100),
+                    last_tick_ts=updated_cat.get("last_tick_ts", int(time.time())),
+                )
+            except Exception as e:
+                logger.exception(f"update_cat_stats failed for cat_id={updated_cat.get('id')}: {e}")
+
+            # محاسبه استت و درآمد
+            stats = compute_cat_effective_stats(updated_cat)
+            mph = compute_cat_mph(updated_cat)
+            gear_codes = parse_gear_codes(updated_cat.get("gear", ""))
+            gear_text = ", ".join(
+                [GEAR_ITEMS[g]["name"] for g in gear_codes if g in GEAR_ITEMS]
+            )
+
+            cat_info = (
+                f"{i}. {rarity_emoji(updated_cat.get('rarity', 'common'))} **{updated_cat.get('name', 'گربه')}** "
+                f"(ID: {updated_cat.get('id', '?')})\n"
+                f"   🍗 گرسنگی: {updated_cat.get('hunger', 0)}/100\n"
+                f"   😊 خوشحالی: {updated_cat.get('happiness', 0)}/100\n"
+                f"   ⬆️ سطح: {updated_cat.get('level', 1)} (XP: {updated_cat.get('xp', 0)}/{xp_required_for_level(updated_cat.get('level', 1))})\n"
+            )
+
+            if gear_text:
+                cat_info += f"   🛡️ تجهیزات: {gear_text}\n"
+
+            cat_info += f"   💰 درآمد: {mph:.1f} میو/ساعت"
+
+            cat_list.append(cat_info)
+
+        if dead_cats:
+            cat_list.append(f"\n⚰️ {dead_cats} گربه بر اثر بی‌توجهی مردند!")
+
+        text = "🐱 **گربه‌های تو:**\n\n" + "\n".join(cat_list)
+
+        if len(text) > 4000:
+            chunks = [text[i:i+4000] for i in range(0, len(text), 4000)]
+            for chunk in chunks:
+                await message.reply(chunk, parse_mode=types.ParseMode.MARKDOWN)
+        else:
+            await message.reply(text, parse_mode=types.ParseMode.MARKDOWN)
+
+    except Exception as e:
+        logger.exception(f"Error in /cats handler: {e}")
+        await message.reply("❌ یه خطای داخلی تو /cats افتاد؛ تو لاگ بررسی می‌کنیم.")
 
 
 
