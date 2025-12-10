@@ -1947,6 +1947,11 @@ async def cmd_breed(message: types.Message, state: FSMContext):
     await message.reply(text)
     await BreedStates.confirm_breeding.set()
 
+@dp.message_handler(commands=["clan"])
+async def cmd_clan(message: types.Message):
+    logger.info(f"/clan received from {message.from_user.id}: {message.text!r}")
+    await message.reply("✅ /clan handler reached! (نسخه تست)")
+
 
 @dp.message_handler(state=BreedStates.confirm_breeding)
 async def process_breeding_confirmation(message: types.Message, state: FSMContext):
