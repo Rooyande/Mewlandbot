@@ -2853,14 +2853,11 @@ async def on_shutdown(app: web.Application):
 
 
 def main():
-    app = web.Application()
-    app.router.add_post(WEBHOOK_PATH, handle_webhook)
-    app.on_startup.append(on_startup)
-    app.on_shutdown.append(on_shutdown)
-
-    logger.info(f"Starting web app on {APP_HOST}:{APP_PORT}")
-    web.run_app(app, host=APP_HOST, port=APP_PORT)
+    from aiogram import executor
+    logger.info("Starting bot in POLLING mode...")
+    executor.start_polling(dp, skip_updates=True)
 
 
 if __name__ == "__main__":
     main()
+
