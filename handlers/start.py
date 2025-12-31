@@ -17,4 +17,5 @@ def register(dp: Dispatcher):
             "- /leaderboard\n"
             "- /market\n"
             "- /clan\n"
+            "- /achievements\n"
         )
