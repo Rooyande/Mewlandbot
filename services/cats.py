@@ -8,14 +8,14 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from services.achievements import award_achievement
 
-from db import repo_users
-from db import repo_cats
+from db import repo_users, repo_cats
 
 
 # =========================
 #  Fallback-safe Game Config
 # =========================
-# اگر بعداً core/game_config ساختی، خودکار از آن می‌خواند.
+# اگر فایل‌های config جدا ساخته‌ای، این importها کار می‌کنند.
+# اگر هنوز نداری، همین مقادیر پیش‌فرض استفاده می‌شوند.
 try:
     from core.game_config import (  # type: ignore
         RARITY_CONFIG,
@@ -198,6 +198,7 @@ def apply_cat_tick(cat: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         return cat
 
     hours = elapsed / 3600.0
+
     hunger = int(cat.get("hunger", 100) - HUNGER_DECAY_PER_HOUR * hours)
     happiness = int(cat.get("happiness", 100) - HAPPINESS_DECAY_PER_HOUR * hours)
 
@@ -215,10 +216,14 @@ def apply_cat_tick(cat: Dict[str, Any]) -> Optional[Dict[str, Any]]:
 
 
 # =========================
-# Cats Service (uses repos)
+# DB Access (Repo Layer)
 # =========================
 @dataclass
 class CatsService:
+    """
+    Handlerها فقط I/O تلگرام. این سرویس قوانین را اجرا می‌کند و دیتا را فقط از Repo می‌گیرد/می‌نویسد.
+    """
+
     # -------- Users ----------
     def get_user_by_tg(self, telegram_id: int) -> Optional[Dict[str, Any]]:
         return repo_users.get_user_by_tg(int(telegram_id))
@@ -231,13 +236,18 @@ class CatsService:
 
     # -------- Cats ----------
     def get_user_cats(self, owner_id: int, include_dead: bool = False) -> List[Dict[str, Any]]:
-        return repo_cats.list_user_cats(int(owner_id), include_dead=bool(include_dead))
+        return repo_cats.list_user_cats(int(owner_id), include_dead=include_dead)
 
     def get_cat(self, cat_id: int, owner_id: Optional[int] = None) -> Optional[Dict[str, Any]]:
-        return repo_cats.get_cat(int(cat_id), int(owner_id) if owner_id is not None else None)
+        if owner_id is None:
+            return repo_cats.get_cat(int(cat_id), None)
+        return repo_cats.get_cat(int(cat_id), int(owner_id))
 
     def update_cat(self, cat_id: int, owner_id: Optional[int] = None, **fields: Any) -> None:
-        repo_cats.update_cat_fields(int(cat_id), int(owner_id) if owner_id is not None else None, **fields)
+        if owner_id is None:
+            repo_cats.update_cat_fields(int(cat_id), None, **fields)
+        else:
+            repo_cats.update_cat_fields(int(cat_id), int(owner_id), **fields)
 
     def kill_cat(self, cat_id: int, owner_id: Optional[int] = None) -> None:
         repo_cats.kill_cat(int(cat_id), int(owner_id) if owner_id is not None else None)
@@ -251,10 +261,7 @@ class CatsService:
         trait: str,
         description: str,
     ) -> int:
-        cid = repo_cats.add_cat(int(owner_id), name, rarity, element, trait, description)
-        if cid is None:
-            raise ServiceError("cat insert failed")
-        return int(cid)
+        return int(repo_cats.add_cat(int(owner_id), name, rarity, element, trait, description))
 
     # =========================
     # Business Use-Cases
@@ -286,6 +293,7 @@ class CatsService:
         cat_id = self.add_cat(user_id, name, rarity, element, trait, description)
         self.update_user_points(telegram_id, points - price)
 
+        # ---- Achievements (first_cat) ----
         try:
             award_achievement(telegram_id, username, "first_cat")
         except Exception:
@@ -317,6 +325,7 @@ class CatsService:
                 dead_count += 1
                 continue
 
+            # persist tick
             self.update_cat(
                 int(updated["id"]),
                 owner_id,
@@ -534,4 +543,5 @@ class CatsService:
         }
 
 
+# Singleton (برای اینکه handlerها راحت import کنند)
 cats_service = CatsService()
