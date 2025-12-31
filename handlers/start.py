@@ -8,9 +8,11 @@ def register(dp: Dispatcher):
         await message.reply(
             "😺 میولند\n\n"
             "دستورات:\n"
-            "- mew (متنی) جمع کردن امتیاز با کول‌داون\n"
-            "- /profile پروفایل\n"
-            "- /adopt [rarity] خرید گربه\n"
-            "- /cats لیست گربه‌ها\n"
-            "- /leaderboard لیدربورد\n"
+            "- mew (متنی)\n"
+            "- /profile\n"
+            "- /adopt [rarity]\n"
+            "- /cats\n"
+            "- /feed <cat_id> <amount>\n"
+            "- /play <cat_id>\n"
+            "- /leaderboard\n"
         )
