@@ -1,21 +1,21 @@
 # services/cats.py
 from __future__ import annotations
 
-import os
 import random
 import time
-import sqlite3
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Tuple
 
 from services.achievements import award_achievement
 
+from db import repo_users
+from db import repo_cats
+
 
 # =========================
 #  Fallback-safe Game Config
 # =========================
-# اگر فایل‌های config جدا ساخته‌ای، این importها کار می‌کنند.
-# اگر هنوز نداری، همین مقادیر پیش‌فرض استفاده می‌شوند.
+# اگر بعداً core/game_config ساختی، خودکار از آن می‌خواند.
 try:
     from core.game_config import (  # type: ignore
         RARITY_CONFIG,
@@ -198,7 +198,6 @@ def apply_cat_tick(cat: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         return cat
 
     hours = elapsed / 3600.0
-
     hunger = int(cat.get("hunger", 100) - HUNGER_DECAY_PER_HOUR * hours)
     happiness = int(cat.get("happiness", 100) - HAPPINESS_DECAY_PER_HOUR * hours)
 
@@ -216,124 +215,32 @@ def apply_cat_tick(cat: Dict[str, Any]) -> Optional[Dict[str, Any]]:
 
 
 # =========================
-# DB Access (Repo or fallback)
+# Cats Service (uses repos)
 # =========================
-DB_PATH = os.getenv("DB_PATH", os.getenv("DATABASE_URL", "mewland.db"))
-
-
-def _get_conn() -> sqlite3.Connection:
-    conn = sqlite3.connect(DB_PATH)
-    conn.row_factory = sqlite3.Row
-    return conn
-
-
 @dataclass
 class CatsService:
-    """
-    این سرویس عمداً self-contained است تا حتی اگر repoها کامل نشده باشند هم کار کند.
-    """
-
     # -------- Users ----------
     def get_user_by_tg(self, telegram_id: int) -> Optional[Dict[str, Any]]:
-        conn = _get_conn()
-        cur = conn.cursor()
-        cur.execute("SELECT * FROM users WHERE telegram_id = ?", (telegram_id,))
-        row = cur.fetchone()
-        conn.close()
-        return dict(row) if row else None
+        return repo_users.get_user_by_tg(int(telegram_id))
 
     def get_or_create_user_id(self, telegram_id: int, username: Optional[str]) -> int:
-        conn = _get_conn()
-        cur = conn.cursor()
-        cur.execute("SELECT id, username FROM users WHERE telegram_id = ?", (telegram_id,))
-        row = cur.fetchone()
-        if row:
-            uid = int(row["id"])
-            old_un = row["username"]
-            if username and username != old_un:
-                cur.execute("UPDATE users SET username = ? WHERE id = ?", (username, uid))
-                conn.commit()
-            conn.close()
-            return uid
-
-        now = int(time.time())
-        cur.execute(
-            "INSERT INTO users (telegram_id, username, created_at) VALUES (?, ?, ?)",
-            (telegram_id, username, now),
-        )
-        conn.commit()
-        uid = int(cur.lastrowid)
-        conn.close()
-        return uid
+        return int(repo_users.get_or_create_user(int(telegram_id), username))
 
     def update_user_points(self, telegram_id: int, new_points: int) -> None:
-        conn = _get_conn()
-        cur = conn.cursor()
-        cur.execute("UPDATE users SET mew_points = ? WHERE telegram_id = ?", (int(new_points), telegram_id))
-        conn.commit()
-        conn.close()
+        repo_users.update_user_fields(int(telegram_id), mew_points=int(new_points))
 
     # -------- Cats ----------
     def get_user_cats(self, owner_id: int, include_dead: bool = False) -> List[Dict[str, Any]]:
-        conn = _get_conn()
-        cur = conn.cursor()
-        if include_dead:
-            cur.execute("SELECT * FROM cats WHERE owner_id = ? ORDER BY id", (owner_id,))
-        else:
-            cur.execute("SELECT * FROM cats WHERE owner_id = ? AND alive = 1 ORDER BY id", (owner_id,))
-        rows = cur.fetchall()
-        conn.close()
-        return [dict(r) for r in rows]
+        return repo_cats.list_user_cats(int(owner_id), include_dead=bool(include_dead))
 
     def get_cat(self, cat_id: int, owner_id: Optional[int] = None) -> Optional[Dict[str, Any]]:
-        conn = _get_conn()
-        cur = conn.cursor()
-        if owner_id is None:
-            cur.execute("SELECT * FROM cats WHERE id = ?", (int(cat_id),))
-        else:
-            cur.execute("SELECT * FROM cats WHERE id = ? AND owner_id = ?", (int(cat_id), int(owner_id)))
-        row = cur.fetchone()
-        conn.close()
-        return dict(row) if row else None
+        return repo_cats.get_cat(int(cat_id), int(owner_id) if owner_id is not None else None)
 
     def update_cat(self, cat_id: int, owner_id: Optional[int] = None, **fields: Any) -> None:
-        allowed = {
-            "hunger",
-            "happiness",
-            "xp",
-            "level",
-            "gear",
-            "stat_power",
-            "stat_agility",
-            "stat_luck",
-            "last_tick_ts",
-            "last_breed_ts",
-            "alive",
-            "owner_id",
-            "name",
-        }
-        data = {k: v for k, v in fields.items() if k in allowed}
-        if not data:
-            return
-
-        set_clause = ", ".join(f"{k} = ?" for k in data.keys())
-        params = list(data.values())
-        params.append(int(cat_id))
-
-        conn = _get_conn()
-        cur = conn.cursor()
-
-        if owner_id is not None:
-            params.append(int(owner_id))
-            cur.execute(f"UPDATE cats SET {set_clause} WHERE id = ? AND owner_id = ?", params)
-        else:
-            cur.execute(f"UPDATE cats SET {set_clause} WHERE id = ?", params)
-
-        conn.commit()
-        conn.close()
+        repo_cats.update_cat_fields(int(cat_id), int(owner_id) if owner_id is not None else None, **fields)
 
     def kill_cat(self, cat_id: int, owner_id: Optional[int] = None) -> None:
-        self.update_cat(cat_id, owner_id, alive=0)
+        repo_cats.kill_cat(int(cat_id), int(owner_id) if owner_id is not None else None)
 
     def add_cat(
         self,
@@ -344,25 +251,10 @@ class CatsService:
         trait: str,
         description: str,
     ) -> int:
-        now = int(time.time())
-        conn = _get_conn()
-        cur = conn.cursor()
-        cur.execute(
-            """
-            INSERT INTO cats (
-                owner_id, name, rarity, element, trait, description,
-                level, xp, hunger, happiness, gear,
-                stat_power, stat_agility, stat_luck,
-                created_at, last_tick_ts, alive, is_special
-            ) VALUES (?, ?, ?, ?, ?, ?, 1, 0, 100, 100, '',
-                      1, 1, 1, ?, ?, 1, 0)
-            """,
-            (int(owner_id), name, rarity, element, trait, description, now, now),
-        )
-        conn.commit()
-        cat_id = int(cur.lastrowid)
-        conn.close()
-        return cat_id
+        cid = repo_cats.add_cat(int(owner_id), name, rarity, element, trait, description)
+        if cid is None:
+            raise ServiceError("cat insert failed")
+        return int(cid)
 
     # =========================
     # Business Use-Cases
@@ -394,7 +286,6 @@ class CatsService:
         cat_id = self.add_cat(user_id, name, rarity, element, trait, description)
         self.update_user_points(telegram_id, points - price)
 
-        # ---- Achievements (first_cat) ----
         try:
             award_achievement(telegram_id, username, "first_cat")
         except Exception:
@@ -426,7 +317,6 @@ class CatsService:
                 dead_count += 1
                 continue
 
-            # persist tick
             self.update_cat(
                 int(updated["id"]),
                 owner_id,
@@ -644,5 +534,4 @@ class CatsService:
         }
 
 
-# Singleton (برای اینکه handlerها راحت import کنند)
 cats_service = CatsService()
