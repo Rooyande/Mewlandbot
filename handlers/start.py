@@ -15,5 +15,6 @@ def register(dp: Dispatcher):
             "- /feed <cat_id> <amount>\n"
             "- /play <cat_id>\n"
             "- /leaderboard\n"
-            "- /market (بازار)\n"
+            "- /market\n"
+            "- /clan\n"
         )
