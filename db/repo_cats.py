@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import time
-from typing import Any, Dict, List, Optional
+from typing import Optional, Dict, Any, List
 
 from db.db import session
 
@@ -14,7 +14,7 @@ def add_cat(
     element: str,
     trait: str,
     description: str,
-) -> Optional[int]:
+) -> int:
     now = int(time.time())
     with session() as conn:
         cur = conn.cursor()
@@ -28,7 +28,7 @@ def add_cat(
             ) VALUES (?, ?, ?, ?, ?, ?, 1, 0, 100, 100, '',
                       1, 1, 1, ?, ?, 1, 0)
             """,
-            (owner_id, name, rarity, element, trait, description, now, now),
+            (int(owner_id), name, rarity, element, trait, description, now, now),
         )
         return int(cur.lastrowid)
 
@@ -37,12 +37,9 @@ def list_user_cats(owner_id: int, include_dead: bool = False) -> List[Dict[str, 
     with session() as conn:
         cur = conn.cursor()
         if include_dead:
-            cur.execute("SELECT * FROM cats WHERE owner_id = ? ORDER BY id", (owner_id,))
+            cur.execute("SELECT * FROM cats WHERE owner_id = ? ORDER BY id", (int(owner_id),))
         else:
-            cur.execute(
-                "SELECT * FROM cats WHERE owner_id = ? AND alive = 1 ORDER BY id",
-                (owner_id,),
-            )
+            cur.execute("SELECT * FROM cats WHERE owner_id = ? AND alive = 1 ORDER BY id", (int(owner_id),))
         rows = cur.fetchall()
         return [dict(r) for r in rows]
 
@@ -58,11 +55,8 @@ def get_cat(cat_id: int, owner_id: Optional[int] = None) -> Optional[Dict[str, A
         return dict(row) if row else None
 
 
-def update_cat_fields(cat_id: int, owner_id: Optional[int] = None, **kwargs: Any) -> None:
-    if not kwargs:
-        return
-
-    # IMPORTANT: اینجا فقط «فیلدهای قابل‌تغییر» را allow می‌کنیم.
+def update_cat_fields(cat_id: int, owner_id: Optional[int] = None, **fields: Any) -> None:
+    # NOTE: این allowed باید با نیاز سرویس‌ها هم‌راستا باشد (rename/transfer/breed)
     allowed = {
         "hunger",
         "happiness",
@@ -73,27 +67,29 @@ def update_cat_fields(cat_id: int, owner_id: Optional[int] = None, **kwargs: Any
         "stat_agility",
         "stat_luck",
         "last_tick_ts",
-        "last_breed_ts",
         "alive",
+        # لازم برای rename/transfer/breeding:
         "name",
         "owner_id",
+        "last_breed_ts",
     }
-    fields = {k: v for k, v in kwargs.items() if k in allowed}
-    if not fields:
+    data = {k: v for k, v in fields.items() if k in allowed}
+    if not data:
         return
 
-    set_clause = ", ".join(f"{k} = ?" for k in fields.keys())
-    params = list(fields.values())
-    params.append(int(cat_id))
+    set_clause = ", ".join([f"{k} = ?" for k in data.keys()])
+    params = list(data.values())
 
     with session() as conn:
         cur = conn.cursor()
-        if owner_id is not None:
+        if owner_id is None:
+            params.append(int(cat_id))
+            cur.execute(f"UPDATE cats SET {set_clause} WHERE id = ?", params)
+        else:
+            params.append(int(cat_id))
             params.append(int(owner_id))
             cur.execute(f"UPDATE cats SET {set_clause} WHERE id = ? AND owner_id = ?", params)
-        else:
-            cur.execute(f"UPDATE cats SET {set_clause} WHERE id = ?", params)
 
 
 def kill_cat(cat_id: int, owner_id: Optional[int] = None) -> None:
-    update_cat_fields(int(cat_id), owner_id, alive=0)
+    update_cat_fields(cat_id, owner_id, alive=0)
