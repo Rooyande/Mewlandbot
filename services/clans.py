@@ -1,9 +1,12 @@
+# services/clans.py
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Optional, List, Dict, Any
 
 from db.repo_users import get_or_create_user, get_user_by_tg, update_user_fields
 from db import repo_clans
+
+from services.achievements import award_achievement
 
 
 @dataclass(frozen=True)
@@ -45,7 +48,17 @@ def clan_create(user_tg: int, username: Optional[str], name: str) -> ClanResult:
         return ClanResult(False, "❌ ایجاد کلن ناموفق (نام تکراری یا شما قبلاً عضو کلن هستید).")
 
     update_user_fields(user_tg, mew_points=points - repo_clans.CLAN_CREATION_COST)
-    return ClanResult(True, f"🎉 کلن {name} ساخته شد.\n💰 هزینه: {repo_clans.CLAN_CREATION_COST}")
+
+    # Achievement: clan_leader
+    ach_msg = ""
+    try:
+        ach_res = award_achievement(user_tg, username, "clan_leader")
+        if "دستاورد جدید" in ach_res.message:
+            ach_msg = "\n\n" + ach_res.message
+    except Exception:
+        ach_msg = ""
+
+    return ClanResult(True, f"🎉 کلن {name} ساخته شد.\n💰 هزینه: {repo_clans.CLAN_CREATION_COST}" + ach_msg)
 
 
 def clan_join(user_tg: int, username: Optional[str], name: str) -> ClanResult:
