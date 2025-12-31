@@ -12,8 +12,6 @@ from typing import Any, Dict, List, Optional, Tuple
 # =========================
 #  Fallback-safe Game Config
 # =========================
-# اگر فایل‌های config جدا ساخته‌ای، این importها کار می‌کنند.
-# اگر هنوز نداری، همین مقادیر پیش‌فرض استفاده می‌شوند.
 try:
     from core.game_config import (  # type: ignore
         RARITY_CONFIG,
@@ -50,10 +48,42 @@ except Exception:
     TRAITS = ["lazy", "hyper", "greedy", "cuddly", "brave", "shy", "noisy", "sleepy", "generous"]
 
     GEAR_ITEMS: Dict[str, Dict[str, Any]] = {
-        "scarf": {"name": "🧣 شال گرم", "price": 500, "mph_bonus": 2.0, "power_bonus": 1, "agility_bonus": 0, "luck_bonus": 0, "min_level": 1},
-        "bell": {"name": "🔔 گردنبند زنگوله‌ای", "price": 800, "mph_bonus": 3.0, "power_bonus": 0, "agility_bonus": 1, "luck_bonus": 1, "min_level": 3},
-        "boots": {"name": "🥾 چکمه تریپ‌دار", "price": 1200, "mph_bonus": 1.0, "power_bonus": 0, "agility_bonus": 3, "luck_bonus": 0, "min_level": 5},
-        "crown": {"name": "👑 تاج سلطنتی", "price": 3000, "mph_bonus": 5.0, "power_bonus": 2, "agility_bonus": 1, "luck_bonus": 2, "min_level": 10},
+        "scarf": {
+            "name": "🧣 شال گرم",
+            "price": 500,
+            "mph_bonus": 2.0,
+            "power_bonus": 1,
+            "agility_bonus": 0,
+            "luck_bonus": 0,
+            "min_level": 1,
+        },
+        "bell": {
+            "name": "🔔 گردنبند زنگوله‌ای",
+            "price": 800,
+            "mph_bonus": 3.0,
+            "power_bonus": 0,
+            "agility_bonus": 1,
+            "luck_bonus": 1,
+            "min_level": 3,
+        },
+        "boots": {
+            "name": "🥾 چکمه تریپ‌دار",
+            "price": 1200,
+            "mph_bonus": 1.0,
+            "power_bonus": 0,
+            "agility_bonus": 3,
+            "luck_bonus": 0,
+            "min_level": 5,
+        },
+        "crown": {
+            "name": "👑 تاج سلطنتی",
+            "price": 3000,
+            "mph_bonus": 5.0,
+            "power_bonus": 2,
+            "agility_bonus": 1,
+            "luck_bonus": 2,
+            "min_level": 10,
+        },
     }
 
     HUNGER_DECAY_PER_HOUR = 8
@@ -64,13 +94,9 @@ except Exception:
 
 
 # =========================
-# Optional Achievements Hook
+# Achievements
 # =========================
-# اگر ماژول achievements را داری، بعد از اولین adopt اتوماتیک award می‌کنیم.
-try:
-    from services.achievements import award_achievement  # type: ignore
-except Exception:  # pragma: no cover
-    award_achievement = None  # type: ignore
+from services.achievements import award_achievement
 
 
 # =========================
@@ -181,7 +207,6 @@ def apply_cat_tick(cat: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     hunger = max(0, min(100, hunger))
     happiness = max(0, min(100, happiness))
 
-    # مرگ: فقط وقتی گرسنگی صفر باشد و مدت زیادی گذشته باشد
     if hunger <= 0 and elapsed > CAT_DEATH_TIMEOUT:
         return None
 
@@ -206,7 +231,7 @@ def _get_conn() -> sqlite3.Connection:
 @dataclass
 class CatsService:
     """
-    این سرویس self-contained است تا حتی اگر repoها کامل نبودند هم کار کند.
+    سرویس self-contained برای Cats.
     """
 
     # -------- Users ----------
@@ -274,9 +299,19 @@ class CatsService:
 
     def update_cat(self, cat_id: int, owner_id: Optional[int] = None, **fields: Any) -> None:
         allowed = {
-            "hunger", "happiness", "xp", "level", "gear",
-            "stat_power", "stat_agility", "stat_luck",
-            "last_tick_ts", "last_breed_ts", "alive", "owner_id", "name"
+            "hunger",
+            "happiness",
+            "xp",
+            "level",
+            "gear",
+            "stat_power",
+            "stat_agility",
+            "stat_luck",
+            "last_tick_ts",
+            "last_breed_ts",
+            "alive",
+            "owner_id",
+            "name",
         }
         data = {k: v for k, v in fields.items() if k in allowed}
         if not data:
@@ -360,13 +395,12 @@ class CatsService:
         cat_id = self.add_cat(user_id, name, rarity, element, trait, description)
         self.update_user_points(telegram_id, points - price)
 
-        # Achievement hook: first_cat
-        if award_achievement is not None:
-            try:
-                award_achievement(telegram_id, username, "first_cat")
-            except Exception:
-                # عمداً silent: نباید خرید گربه را خراب کند
-                pass
+        # ---- Achievements (first_cat) ----
+        # اگر قبلاً گرفته باشد مشکلی نیست.
+        try:
+            award_achievement(telegram_id, username, "first_cat")
+        except Exception:
+            pass
 
         return {
             "cat_id": cat_id,
@@ -394,7 +428,6 @@ class CatsService:
                 dead_count += 1
                 continue
 
-            # persist tick
             self.update_cat(
                 int(updated["id"]),
                 owner_id,
@@ -612,5 +645,5 @@ class CatsService:
         }
 
 
-# Singleton (برای اینکه handlerها راحت import کنند)
+# Singleton
 cats_service = CatsService()
