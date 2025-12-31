@@ -3,6 +3,7 @@ from handlers import start
 from handlers import mew
 from handlers import profile
 from handlers import cats
+from handlers import leaderboard
 
 
 def register_all(dp: Dispatcher):
@@ -10,3 +11,4 @@ def register_all(dp: Dispatcher):
     mew.register(dp)
     profile.register(dp)
     cats.register(dp)
+    leaderboard.register(dp)
