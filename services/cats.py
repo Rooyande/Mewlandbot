@@ -8,10 +8,14 @@ import sqlite3
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Tuple
 
+from services.achievements import award_achievement
+
 
 # =========================
 #  Fallback-safe Game Config
 # =========================
+# اگر فایل‌های config جدا ساخته‌ای، این importها کار می‌کنند.
+# اگر هنوز نداری، همین مقادیر پیش‌فرض استفاده می‌شوند.
 try:
     from core.game_config import (  # type: ignore
         RARITY_CONFIG,
@@ -91,12 +95,6 @@ except Exception:
     CAT_DEATH_TIMEOUT = 129600  # 36h
     BASE_XP_PER_LEVEL = 100
     XP_MULTIPLIER = 1.5
-
-
-# =========================
-# Achievements
-# =========================
-from services.achievements import award_achievement
 
 
 # =========================
@@ -207,6 +205,7 @@ def apply_cat_tick(cat: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     hunger = max(0, min(100, hunger))
     happiness = max(0, min(100, happiness))
 
+    # مرگ: فقط وقتی گرسنگی صفر باشد و مدت زیادی گذشته باشد
     if hunger <= 0 and elapsed > CAT_DEATH_TIMEOUT:
         return None
 
@@ -231,7 +230,7 @@ def _get_conn() -> sqlite3.Connection:
 @dataclass
 class CatsService:
     """
-    سرویس self-contained برای Cats.
+    این سرویس عمداً self-contained است تا حتی اگر repoها کامل نشده باشند هم کار کند.
     """
 
     # -------- Users ----------
@@ -396,7 +395,6 @@ class CatsService:
         self.update_user_points(telegram_id, points - price)
 
         # ---- Achievements (first_cat) ----
-        # اگر قبلاً گرفته باشد مشکلی نیست.
         try:
             award_achievement(telegram_id, username, "first_cat")
         except Exception:
@@ -428,6 +426,7 @@ class CatsService:
                 dead_count += 1
                 continue
 
+            # persist tick
             self.update_cat(
                 int(updated["id"]),
                 owner_id,
@@ -645,5 +644,5 @@ class CatsService:
         }
 
 
-# Singleton
+# Singleton (برای اینکه handlerها راحت import کنند)
 cats_service = CatsService()
