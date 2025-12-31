@@ -1,43 +1,76 @@
 # services/cats.py
 from __future__ import annotations
 
+import os
 import random
 import time
+import sqlite3
 from dataclasses import dataclass
-from datetime import datetime
 from typing import Any, Dict, List, Optional, Tuple
 
 
-# تلاش می‌کنیم تنظیمات را از core.config بگیریم؛ اگر نبود، فایل همچنان import می‌شود.
+# =========================
+#  Fallback-safe Game Config
+# =========================
+# اگر فایل‌های config جدا ساخته‌ای، این importها کار می‌کنند.
+# اگر هنوز نداری، همین مقادیر پیش‌فرض استفاده می‌شوند.
 try:
-    from core import config
-except Exception:  # pragma: no cover
-    config = None  # type: ignore
+    from core.game_config import (  # type: ignore
+        RARITY_CONFIG,
+        RARITY_WEIGHTS,
+        ELEMENTS,
+        TRAITS,
+        GEAR_ITEMS,
+        HUNGER_DECAY_PER_HOUR,
+        HAPPINESS_DECAY_PER_HOUR,
+        CAT_DEATH_TIMEOUT,
+        BASE_XP_PER_LEVEL,
+        XP_MULTIPLIER,
+    )
+except Exception:
+    RARITY_CONFIG: Dict[str, Dict[str, Any]] = {
+        "common": {"price": 200, "base_mph": 1.0, "emoji": "⚪️", "breeding_cost": 100},
+        "rare": {"price": 800, "base_mph": 3.0, "emoji": "🟦", "breeding_cost": 300},
+        "epic": {"price": 2500, "base_mph": 7.0, "emoji": "🟪", "breeding_cost": 1000},
+        "legendary": {"price": 7000, "base_mph": 15.0, "emoji": "🟨", "breeding_cost": 3000},
+        "mythic": {"price": 15000, "base_mph": 30.0, "emoji": "🟥", "breeding_cost": 7000},
+        "special": {"price": 50000, "base_mph": 50.0, "emoji": "🌟", "breeding_cost": 15000},
+    }
 
+    RARITY_WEIGHTS: List[Tuple[str, int]] = [
+        ("common", 50),
+        ("rare", 23),
+        ("epic", 12),
+        ("legendary", 8),
+        ("mythic", 5),
+        ("special", 2),
+    ]
 
-# ====== DB Repos (اختیاری/قابل جایگزینی) ======
-# اگر ساختار repoها در پروژه‌ات متفاوت است، فقط همین importها را هم‌نام کن.
-try:
-    from db import repo_users, repo_cats
-except Exception:  # pragma: no cover
-    repo_users = None  # type: ignore
-    repo_cats = None  # type: ignore
+    ELEMENTS = ["fire", "water", "earth", "air", "shadow", "light", "ice", "candy"]
+    TRAITS = ["lazy", "hyper", "greedy", "cuddly", "brave", "shy", "noisy", "sleepy", "generous"]
 
-try:
-    from db import repo_achievements
-except Exception:  # pragma: no cover
-    repo_achievements = None  # type: ignore
+    GEAR_ITEMS: Dict[str, Dict[str, Any]] = {
+        "scarf": {"name": "🧣 شال گرم", "price": 500, "mph_bonus": 2.0, "power_bonus": 1, "agility_bonus": 0, "luck_bonus": 0, "min_level": 1},
+        "bell": {"name": "🔔 گردنبند زنگوله‌ای", "price": 800, "mph_bonus": 3.0, "power_bonus": 0, "agility_bonus": 1, "luck_bonus": 1, "min_level": 3},
+        "boots": {"name": "🥾 چکمه تریپ‌دار", "price": 1200, "mph_bonus": 1.0, "power_bonus": 0, "agility_bonus": 3, "luck_bonus": 0, "min_level": 5},
+        "crown": {"name": "👑 تاج سلطنتی", "price": 3000, "mph_bonus": 5.0, "power_bonus": 2, "agility_bonus": 1, "luck_bonus": 2, "min_level": 10},
+    }
+
+    HUNGER_DECAY_PER_HOUR = 8
+    HAPPINESS_DECAY_PER_HOUR = 5
+    CAT_DEATH_TIMEOUT = 129600  # 36h
+    BASE_XP_PER_LEVEL = 100
+    XP_MULTIPLIER = 1.5
 
 
 # =========================
-# Exceptions (Service-level)
+# Exceptions (Service Layer)
 # =========================
-
 class ServiceError(Exception):
     pass
 
 
-class NotFound(ServiceError):
+class ValidationError(ServiceError):
     pass
 
 
@@ -45,112 +78,34 @@ class NotEnoughPoints(ServiceError):
     pass
 
 
-class InvalidInput(ServiceError):
+class NotFound(ServiceError):
     pass
 
 
-class CooldownActive(ServiceError):
-    pass
-
-
-class Forbidden(ServiceError):
+class CatDead(ServiceError):
     pass
 
 
 # =========================
-# Config Helpers / Defaults
+# Helpers
 # =========================
-
-def _cfg(name: str, default: Any) -> Any:
-    if config is None:
-        return default
-    return getattr(config, name, default)
-
-
-RARITY_CONFIG: Dict[str, Dict[str, Any]] = _cfg("RARITY_CONFIG", {
-    "common": {"price": 200, "base_mph": 1.0, "emoji": "⚪️", "breeding_cost": 100},
-    "rare": {"price": 800, "base_mph": 3.0, "emoji": "🟦", "breeding_cost": 300},
-    "epic": {"price": 2500, "base_mph": 7.0, "emoji": "🟪", "breeding_cost": 1000},
-    "legendary": {"price": 7000, "base_mph": 15.0, "emoji": "🟨", "breeding_cost": 3000},
-    "mythic": {"price": 15000, "base_mph": 30.0, "emoji": "🟥", "breeding_cost": 7000},
-    "special": {"price": 50000, "base_mph": 50.0, "emoji": "🌟", "breeding_cost": 15000},
-})
-
-RARITY_WEIGHTS: List[Tuple[str, int]] = _cfg("RARITY_WEIGHTS", [
-    ("common", 50),
-    ("rare", 23),
-    ("epic", 12),
-    ("legendary", 8),
-    ("mythic", 5),
-    ("special", 2),
-])
-
-GEAR_ITEMS: Dict[str, Dict[str, Any]] = _cfg("GEAR_ITEMS", {})
-
-ELEMENTS: List[str] = _cfg("ELEMENTS", ["fire", "water", "earth", "air", "shadow", "light", "ice", "candy"])
-TRAITS: List[str] = _cfg("TRAITS", ["lazy", "hyper", "greedy", "cuddly", "brave", "shy", "noisy", "sleepy"])
-
-BASE_XP_PER_LEVEL: int = int(_cfg("BASE_XP_PER_LEVEL", 100))
-XP_MULTIPLIER: float = float(_cfg("XP_MULTIPLIER", 1.5))
-
-HUNGER_DECAY_PER_HOUR: int = int(_cfg("HUNGER_DECAY_PER_HOUR", 8))
-HAPPINESS_DECAY_PER_HOUR: int = int(_cfg("HAPPINESS_DECAY_PER_HOUR", 5))
-CAT_DEATH_TIMEOUT: int = int(_cfg("CAT_DEATH_TIMEOUT", 129600))  # 36h
-
-MARKET_FEE_PERCENT: int = int(_cfg("MARKET_FEE_PERCENT", 5))
-
-# رویداد/فصل‌ها (اگر در config داری، همین‌ها را آنجا ست کن)
-CHRISTMAS_EVENT_ACTIVE: bool = bool(_cfg("CHRISTMAS_EVENT_ACTIVE", False))
-CHRISTMAS_EVENT_START: str = str(_cfg("CHRISTMAS_EVENT_START", "2024-12-01"))
-CHRISTMAS_EVENT_END: str = str(_cfg("CHRISTMAS_EVENT_END", "2024-12-31"))
-CHRISTMAS_REWARDS_MULTIPLIER: float = float(_cfg("CHRISTMAS_REWARDS_MULTIPLIER", 1.5))
-
-
-# =========================
-# DTOs
-# =========================
-
-@dataclass(frozen=True)
-class TickOutcome:
-    alive: bool
-    cat: Optional[Dict[str, Any]]
-    died_reason: Optional[str] = None
-
-
-# =========================
-# Pure Helpers
-# =========================
-
-def is_christmas_season(now_ts: Optional[int] = None) -> bool:
-    if not CHRISTMAS_EVENT_ACTIVE:
-        return False
-    try:
-        now_dt = datetime.fromtimestamp(now_ts or int(time.time()))
-        start_date = datetime.strptime(CHRISTMAS_EVENT_START, "%Y-%m-%d").date()
-        end_date = datetime.strptime(CHRISTMAS_EVENT_END, "%Y-%m-%d").date()
-        return start_date <= now_dt.date() <= end_date
-    except Exception:
-        return False
-
-
 def rarity_emoji(rarity: str) -> str:
-    return RARITY_CONFIG.get(rarity, {}).get("emoji", "⚪️")
+    return str(RARITY_CONFIG.get(rarity, {}).get("emoji", "⚪️"))
 
 
 def choose_rarity() -> str:
     roll = random.randint(1, 100)
     cur = 0
-    for r, w in RARITY_WEIGHTS:
+    for rarity, w in RARITY_WEIGHTS:
         cur += w
         if roll <= cur:
-            return r
+            return rarity
     return "common"
 
 
 def xp_required_for_level(level: int) -> int:
-    # level=1 => 100, level=2 => 150, ...
     if level <= 1:
-        return BASE_XP_PER_LEVEL
+        return int(BASE_XP_PER_LEVEL)
     return int(BASE_XP_PER_LEVEL * (XP_MULTIPLIER ** (level - 1)))
 
 
@@ -162,12 +117,13 @@ def parse_gear_codes(gear_field: Any) -> List[str]:
     return [g.strip() for g in str(gear_field).split(",") if g.strip()]
 
 
-def compute_effective_stats(cat: Dict[str, Any]) -> Dict[str, int]:
+def compute_cat_effective_stats(cat: Dict[str, Any]) -> Dict[str, int]:
     power = int(cat.get("stat_power", 1))
     agility = int(cat.get("stat_agility", 1))
     luck = int(cat.get("stat_luck", 1))
 
-    for code in parse_gear_codes(cat.get("gear", "")):
+    gear_codes = parse_gear_codes(cat.get("gear", ""))
+    for code in gear_codes:
         item = GEAR_ITEMS.get(code)
         if not item:
             continue
@@ -178,576 +134,466 @@ def compute_effective_stats(cat: Dict[str, Any]) -> Dict[str, int]:
     return {"power": power, "agility": agility, "luck": luck}
 
 
-def compute_mph(cat: Dict[str, Any]) -> float:
+def compute_cat_mph(cat: Dict[str, Any]) -> float:
     rarity = str(cat.get("rarity", "common"))
     conf = RARITY_CONFIG.get(rarity, RARITY_CONFIG["common"])
     base = float(conf.get("base_mph", 1.0))
 
     level = int(cat.get("level", 1))
-    level_mult = 1.0 + max(0, level - 1) * 0.1
+    level_mult = 1.0 + (max(1, level) - 1) * 0.1  # 10% per level
 
     gear_bonus = 0.0
-    for code in parse_gear_codes(cat.get("gear", "")):
+    gear_codes = parse_gear_codes(cat.get("gear", ""))
+    for code in gear_codes:
         item = GEAR_ITEMS.get(code)
         if item:
             gear_bonus += float(item.get("mph_bonus", 0.0))
 
-    stats = compute_effective_stats(cat)
+    stats = compute_cat_effective_stats(cat)
     stat_bonus = (stats["power"] + stats["agility"] + stats["luck"]) * 0.02
 
     return base * level_mult + gear_bonus + stat_bonus
 
 
-def apply_cat_tick(cat: Dict[str, Any], now_ts: Optional[int] = None) -> TickOutcome:
-    now = int(now_ts or time.time())
+def apply_cat_tick(cat: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    now = int(time.time())
     last_ts = int(cat.get("last_tick_ts") or cat.get("created_at") or now)
     elapsed = max(0, now - last_ts)
 
-    # کمتر از ۱ دقیقه: بی‌خیال (نوسان نده)
     if elapsed < 60:
-        return TickOutcome(alive=True, cat=cat)
+        return cat
 
     hours = elapsed / 3600.0
+
     hunger = int(cat.get("hunger", 100) - HUNGER_DECAY_PER_HOUR * hours)
     happiness = int(cat.get("happiness", 100) - HAPPINESS_DECAY_PER_HOUR * hours)
 
     hunger = max(0, min(100, hunger))
     happiness = max(0, min(100, happiness))
 
-    # مرگ: اگر خیلی وقت گرسنه=۰ بوده
+    # مرگ: فقط وقتی گرسنگی صفر باشد و مدت زیادی گذشته باشد
     if hunger <= 0 and elapsed > CAT_DEATH_TIMEOUT:
-        return TickOutcome(alive=False, cat=None, died_reason="hunger_timeout")
+        return None
 
     cat["hunger"] = hunger
     cat["happiness"] = happiness
     cat["last_tick_ts"] = now
-    return TickOutcome(alive=True, cat=cat)
+    return cat
 
 
 # =========================
-# Achievement hook (safe)
+# DB Access (Repo or fallback)
 # =========================
+DB_PATH = os.getenv("DB_PATH", os.getenv("DATABASE_URL", "mewland.db"))
 
-def _award_achievement(user_db_id: int, achievement_id: str) -> None:
+
+def _get_conn() -> sqlite3.Connection:
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    return conn
+
+
+@dataclass
+class CatsService:
     """
-    این تابع عمداً silent است.
-    اگر repo_achievements هنوز آماده نباشد، هیچ اتفاقی نمی‌افتد.
+    این سرویس عمداً self-contained است تا حتی اگر repoها کامل نشده باشند هم کار کند.
+    اگر db/repo_users.py و db/repo_cats.py را داری، می‌توانی بعداً این کلاس را به آن‌ها متصل کنی.
     """
-    if repo_achievements is None:
-        return
-    try:
-        repo_achievements.add_achievement(user_db_id, achievement_id)
-    except Exception:
-        return
 
+    # -------- Users ----------
+    def get_user_by_tg(self, telegram_id: int) -> Optional[Dict[str, Any]]:
+        conn = _get_conn()
+        cur = conn.cursor()
+        cur.execute("SELECT * FROM users WHERE telegram_id = ?", (telegram_id,))
+        row = cur.fetchone()
+        conn.close()
+        return dict(row) if row else None
 
-# =========================
-# Service API (Cats)
-# =========================
+    def get_or_create_user_id(self, telegram_id: int, username: Optional[str]) -> int:
+        conn = _get_conn()
+        cur = conn.cursor()
+        cur.execute("SELECT id, username FROM users WHERE telegram_id = ?", (telegram_id,))
+        row = cur.fetchone()
+        if row:
+            uid = int(row["id"])
+            old_un = row["username"]
+            if username and username != old_un:
+                cur.execute("UPDATE users SET username = ? WHERE id = ?", (username, uid))
+                conn.commit()
+            conn.close()
+            return uid
 
-def adopt_cat(
-    telegram_id: int,
-    username: Optional[str],
-    rarity: Optional[str] = None,
-) -> Dict[str, Any]:
-    """
-    خرید گربه.
-    خروجی: {cat_id, price, rarity, element, trait, name, points_after, christmas_discount_applied}
-    """
-    if repo_users is None or repo_cats is None:
-        raise ServiceError("DB repos are not wired (repo_users/repo_cats).")
+        now = int(time.time())
+        cur.execute(
+            "INSERT INTO users (telegram_id, username, created_at) VALUES (?, ?, ?)",
+            (telegram_id, username, now),
+        )
+        conn.commit()
+        uid = int(cur.lastrowid)
+        conn.close()
+        return uid
 
-    user_db_id = repo_users.get_or_create_user(telegram_id, username)
-    if not user_db_id:
-        raise ServiceError("cannot create user")
+    def update_user_points(self, telegram_id: int, new_points: int) -> None:
+        conn = _get_conn()
+        cur = conn.cursor()
+        cur.execute("UPDATE users SET mew_points = ? WHERE telegram_id = ?", (int(new_points), telegram_id))
+        conn.commit()
+        conn.close()
 
-    user = repo_users.get_user_by_telegram_id(telegram_id)
-    if not user:
-        raise ServiceError("user not found after create")
+    # -------- Cats ----------
+    def get_user_cats(self, owner_id: int, include_dead: bool = False) -> List[Dict[str, Any]]:
+        conn = _get_conn()
+        cur = conn.cursor()
+        if include_dead:
+            cur.execute("SELECT * FROM cats WHERE owner_id = ? ORDER BY id", (owner_id,))
+        else:
+            cur.execute("SELECT * FROM cats WHERE owner_id = ? AND alive = 1 ORDER BY id", (owner_id,))
+        rows = cur.fetchall()
+        conn.close()
+        return [dict(r) for r in rows]
 
-    # تعیین rarity
-    if rarity:
+    def get_cat(self, cat_id: int, owner_id: Optional[int] = None) -> Optional[Dict[str, Any]]:
+        conn = _get_conn()
+        cur = conn.cursor()
+        if owner_id is None:
+            cur.execute("SELECT * FROM cats WHERE id = ?", (int(cat_id),))
+        else:
+            cur.execute("SELECT * FROM cats WHERE id = ? AND owner_id = ?", (int(cat_id), int(owner_id)))
+        row = cur.fetchone()
+        conn.close()
+        return dict(row) if row else None
+
+    def update_cat(self, cat_id: int, owner_id: Optional[int] = None, **fields: Any) -> None:
+        allowed = {
+            "hunger", "happiness", "xp", "level", "gear",
+            "stat_power", "stat_agility", "stat_luck",
+            "last_tick_ts", "last_breed_ts", "alive", "owner_id", "name"
+        }
+        data = {k: v for k, v in fields.items() if k in allowed}
+        if not data:
+            return
+
+        set_clause = ", ".join(f"{k} = ?" for k in data.keys())
+        params = list(data.values())
+        params.append(int(cat_id))
+
+        conn = _get_conn()
+        cur = conn.cursor()
+
+        if owner_id is not None:
+            params.append(int(owner_id))
+            cur.execute(f"UPDATE cats SET {set_clause} WHERE id = ? AND owner_id = ?", params)
+        else:
+            cur.execute(f"UPDATE cats SET {set_clause} WHERE id = ?", params)
+
+        conn.commit()
+        conn.close()
+
+    def kill_cat(self, cat_id: int, owner_id: Optional[int] = None) -> None:
+        self.update_cat(cat_id, owner_id, alive=0)
+
+    def add_cat(
+        self,
+        owner_id: int,
+        name: str,
+        rarity: str,
+        element: str,
+        trait: str,
+        description: str,
+    ) -> int:
+        now = int(time.time())
+        conn = _get_conn()
+        cur = conn.cursor()
+        cur.execute(
+            """
+            INSERT INTO cats (
+                owner_id, name, rarity, element, trait, description,
+                level, xp, hunger, happiness, gear,
+                stat_power, stat_agility, stat_luck,
+                created_at, last_tick_ts, alive, is_special
+            ) VALUES (?, ?, ?, ?, ?, ?, 1, 0, 100, 100, '',
+                      1, 1, 1, ?, ?, 1, 0)
+            """,
+            (int(owner_id), name, rarity, element, trait, description, now, now),
+        )
+        conn.commit()
+        cat_id = int(cur.lastrowid)
+        conn.close()
+        return cat_id
+
+    # =========================
+    # Business Use-Cases
+    # =========================
+    def adopt_cat(self, telegram_id: int, username: Optional[str], rarity: Optional[str] = None) -> Dict[str, Any]:
+        user_id = self.get_or_create_user_id(telegram_id, username)
+        user = self.get_user_by_tg(telegram_id)
+        if not user:
+            raise ServiceError("user load failed")
+
+        if rarity is None:
+            rarity = choose_rarity()
         rarity = rarity.strip().lower()
+
         if rarity not in RARITY_CONFIG:
-            raise InvalidInput("invalid rarity")
-    else:
-        rarity = choose_rarity()
+            raise ValidationError("rarity_invalid")
 
-    price = int(RARITY_CONFIG[rarity]["price"])
-    christmas_discount = False
-    if is_christmas_season():
-        # مثال: ۱۰٪ تخفیف
-        price = int(price * 0.9)
-        christmas_discount = True
+        price = int(RARITY_CONFIG[rarity]["price"])
+        points = int(user.get("mew_points", 0))
 
-    points = int(user.get("mew_points", 0))
-    if points < price:
-        raise NotEnoughPoints(f"need={price}, have={points}")
+        if points < price:
+            raise NotEnoughPoints(f"need={price},have={points}")
 
-    element = random.choice(ELEMENTS)
-    trait = random.choice(TRAITS)
-    name = f"گربهٔ {rarity}"
+        element = random.choice(ELEMENTS)
+        trait = random.choice(TRAITS)
+        name = f"گربهٔ {rarity}"
+        description = f"یک گربه‌ی {rarity} با عنصر {element} و خوی {trait}"
 
-    cat_id = repo_cats.add_cat(
-        owner_id=user_db_id,
-        name=name,
-        rarity=rarity,
-        element=element,
-        trait=trait,
-        description=f"یک گربه‌ی {rarity} با عنصر {element} و خوی {trait}",
-    )
-    if not cat_id:
-        raise ServiceError("failed to add cat")
+        cat_id = self.add_cat(user_id, name, rarity, element, trait, description)
+        self.update_user_points(telegram_id, points - price)
 
-    # کم کردن امتیاز
-    repo_users.update_user_by_telegram_id(telegram_id, mew_points=points - price)
+        return {
+            "cat_id": cat_id,
+            "rarity": rarity,
+            "price": price,
+            "element": element,
+            "trait": trait,
+            "new_points": points - price,
+        }
 
-    # دستاوردها (هسته‌ای)
-    try:
-        cats = repo_cats.get_user_cats(user_db_id, include_dead=True)
-        if len(cats) == 1:
-            _award_achievement(user_db_id, "first_cat")
-    except Exception:
-        pass
+    def list_cats_and_tick(self, owner_id: int) -> Dict[str, Any]:
+        cats = self.get_user_cats(owner_id, include_dead=True)
 
-    # دستاورد کریسمس نمونه
-    if is_christmas_season():
-        _award_achievement(user_db_id, "christmas_adopter")
+        alive: List[Dict[str, Any]] = []
+        dead_count = 0
+        total_mph = 0.0
 
-    return {
-        "user_db_id": user_db_id,
-        "cat_id": cat_id,
-        "price": price,
-        "rarity": rarity,
-        "element": element,
-        "trait": trait,
-        "name": name,
-        "points_after": points - price,
-        "christmas_discount_applied": christmas_discount,
-    }
+        for cat in cats:
+            if int(cat.get("alive", 1)) != 1:
+                continue
 
+            updated = apply_cat_tick(cat)
+            if not updated:
+                self.kill_cat(int(cat["id"]), owner_id)
+                dead_count += 1
+                continue
 
-def list_user_cats(user_db_id: int) -> Dict[str, Any]:
-    """
-    خروجی: {alive: [...], dead_count: int}
-    هر cat در لیست alive شامل mph و stats است.
-    """
-    if repo_cats is None:
-        raise ServiceError("DB repos are not wired (repo_cats).")
-
-    cats = repo_cats.get_user_cats(user_db_id, include_dead=True)
-
-    alive: List[Dict[str, Any]] = []
-    dead_count = 0
-
-    for c in cats:
-        # اگر alive=0 از DB، dead حساب کن
-        if int(c.get("alive", 1)) != 1:
-            dead_count += 1
-            continue
-
-        outcome = apply_cat_tick(c)
-        if not outcome.alive or not outcome.cat:
-            # مرگ
-            try:
-                repo_cats.kill_cat(c["id"], owner_id=user_db_id)
-            except Exception:
-                pass
-            dead_count += 1
-            continue
-
-        updated = outcome.cat
-        # ذخیره tick
-        try:
-            repo_cats.update_cat_stats(
-                cat_id=int(updated["id"]),
-                owner_id=user_db_id,
+            # persist tick
+            self.update_cat(
+                int(updated["id"]),
+                owner_id,
                 hunger=int(updated.get("hunger", 100)),
                 happiness=int(updated.get("happiness", 100)),
                 last_tick_ts=int(updated.get("last_tick_ts", int(time.time()))),
             )
-        except Exception:
-            pass
 
-        stats = compute_effective_stats(updated)
-        mph = compute_mph(updated)
-        updated_view = dict(updated)
-        updated_view["effective_stats"] = stats
-        updated_view["mph"] = mph
-        updated_view["gear_codes"] = parse_gear_codes(updated.get("gear", ""))
-        alive.append(updated_view)
+            updated["mph"] = compute_cat_mph(updated)
+            updated["eff_stats"] = compute_cat_effective_stats(updated)
+            alive.append(updated)
+            total_mph += float(updated["mph"])
 
-    return {"alive": alive, "dead_count": dead_count}
+        return {"cats": alive, "dead_count": dead_count, "total_mph": total_mph}
 
+    def feed_cat(self, telegram_id: int, owner_id: int, cat_id: int, amount: int) -> Dict[str, Any]:
+        if amount <= 0 or amount > 100:
+            raise ValidationError("amount_invalid")
 
-def feed_cat(user_db_id: int, telegram_id: int, cat_id: int, amount: int) -> Dict[str, Any]:
-    """
-    amount: 1..100
-    cost: amount*2
-    خوشحالی: + amount//3
-    """
-    if repo_users is None or repo_cats is None:
-        raise ServiceError("DB repos are not wired.")
+        user = self.get_user_by_tg(telegram_id)
+        if not user:
+            raise ServiceError("user load failed")
 
-    if amount <= 0 or amount > 100:
-        raise InvalidInput("amount must be 1..100")
+        points = int(user.get("mew_points", 0))
+        cost = int(amount) * 2
+        if points < cost:
+            raise NotEnoughPoints(f"need={cost},have={points}")
 
-    user = repo_users.get_user_by_telegram_id(telegram_id)
-    if not user:
-        raise NotFound("user")
+        cat = self.get_cat(cat_id, owner_id)
+        if not cat:
+            raise NotFound("cat_not_found")
 
-    cat = repo_cats.get_cat(cat_id, owner_id=user_db_id)
-    if not cat:
-        raise NotFound("cat")
+        updated = apply_cat_tick(cat)
+        if not updated:
+            self.kill_cat(cat_id, owner_id)
+            raise CatDead("cat_dead")
 
-    outcome = apply_cat_tick(cat)
-    if not outcome.alive or not outcome.cat:
-        repo_cats.kill_cat(cat_id, owner_id=user_db_id)
-        raise Forbidden("cat is dead")
+        new_hunger = min(100, int(updated.get("hunger", 0)) + int(amount))
+        new_happiness = min(100, int(updated.get("happiness", 0)) + (int(amount) // 3))
 
-    cost = amount * 2
-    points = int(user.get("mew_points", 0))
-    if points < cost:
-        raise NotEnoughPoints(f"need={cost}, have={points}")
-
-    updated = outcome.cat
-    new_hunger = min(100, int(updated.get("hunger", 0)) + amount)
-    new_happiness = min(100, int(updated.get("happiness", 0)) + (amount // 3))
-
-    repo_cats.update_cat_stats(
-        cat_id=cat_id,
-        owner_id=user_db_id,
-        hunger=new_hunger,
-        happiness=new_happiness,
-        last_tick_ts=int(updated.get("last_tick_ts", int(time.time()))),
-    )
-    repo_users.update_user_by_telegram_id(telegram_id, mew_points=points - cost)
-
-    return {
-        "cat_id": cat_id,
-        "name": updated.get("name"),
-        "hunger_before": int(updated.get("hunger", 0)),
-        "hunger_after": new_hunger,
-        "happiness_before": int(updated.get("happiness", 0)),
-        "happiness_after": new_happiness,
-        "cost": cost,
-        "points_after": points - cost,
-    }
-
-
-def play_with_cat(user_db_id: int, cat_id: int) -> Dict[str, Any]:
-    """
-    happiness +15, hunger -5, xp +25
-    """
-    if repo_cats is None:
-        raise ServiceError("DB repos are not wired (repo_cats).")
-
-    cat = repo_cats.get_cat(cat_id, owner_id=user_db_id)
-    if not cat:
-        raise NotFound("cat")
-
-    outcome = apply_cat_tick(cat)
-    if not outcome.alive or not outcome.cat:
-        repo_cats.kill_cat(cat_id, owner_id=user_db_id)
-        raise Forbidden("cat is dead")
-
-    updated = outcome.cat
-    happiness_before = int(updated.get("happiness", 0))
-    hunger_before = int(updated.get("hunger", 0))
-    xp_before = int(updated.get("xp", 0))
-    level_before = int(updated.get("level", 1))
-
-    happiness_after = min(100, happiness_before + 15)
-    hunger_after = max(0, hunger_before - 5)
-    xp_after = xp_before + 25
-    level_after = level_before
-
-    leveled_up = False
-    while xp_after >= xp_required_for_level(level_after):
-        xp_after -= xp_required_for_level(level_after)
-        level_after += 1
-        leveled_up = True
-
-    repo_cats.update_cat_stats(
-        cat_id=cat_id,
-        owner_id=user_db_id,
-        hunger=hunger_after,
-        happiness=happiness_after,
-        xp=xp_after,
-        level=level_after,
-        last_tick_ts=int(updated.get("last_tick_ts", int(time.time()))),
-    )
-
-    return {
-        "cat_id": cat_id,
-        "name": updated.get("name"),
-        "happiness_before": happiness_before,
-        "happiness_after": happiness_after,
-        "hunger_before": hunger_before,
-        "hunger_after": hunger_after,
-        "xp_before": xp_before,
-        "xp_after": xp_after,
-        "level_before": level_before,
-        "level_after": level_after,
-        "leveled_up": leveled_up,
-    }
-
-
-def train_cat(user_db_id: int, telegram_id: int, cat_id: int, stat: str) -> Dict[str, Any]:
-    """
-    stat: power/agility/luck
-    cost: current_stat*100
-    """
-    if repo_users is None or repo_cats is None:
-        raise ServiceError("DB repos are not wired.")
-
-    stat = stat.strip().lower()
-    if stat not in ("power", "agility", "luck"):
-        raise InvalidInput("stat must be power/agility/luck")
-
-    user = repo_users.get_user_by_telegram_id(telegram_id)
-    if not user:
-        raise NotFound("user")
-
-    cat = repo_cats.get_cat(cat_id, owner_id=user_db_id)
-    if not cat:
-        raise NotFound("cat")
-
-    outcome = apply_cat_tick(cat)
-    if not outcome.alive or not outcome.cat:
-        repo_cats.kill_cat(cat_id, owner_id=user_db_id)
-        raise Forbidden("cat is dead")
-
-    current = int(cat.get(f"stat_{stat}", 1))
-    cost = current * 100
-    points = int(user.get("mew_points", 0))
-    if points < cost:
-        raise NotEnoughPoints(f"need={cost}, have={points}")
-
-    new_val = current + 1
-    repo_cats.update_cat_stats(cat_id=cat_id, owner_id=user_db_id, **{f"stat_{stat}": new_val})
-    repo_users.update_user_by_telegram_id(telegram_id, mew_points=points - cost)
-
-    return {
-        "cat_id": cat_id,
-        "name": cat.get("name"),
-        "stat": stat,
-        "before": current,
-        "after": new_val,
-        "cost": cost,
-        "points_after": points - cost,
-    }
-
-
-def buy_gear(user_db_id: int, telegram_id: int, cat_id: int, gear_code: str) -> Dict[str, Any]:
-    """
-    خرید تجهیزات برای گربه.
-    """
-    if repo_users is None or repo_cats is None:
-        raise ServiceError("DB repos are not wired.")
-    gear_code = gear_code.strip().lower()
-
-    if gear_code not in GEAR_ITEMS:
-        raise InvalidInput("invalid gear code")
-
-    item = GEAR_ITEMS[gear_code]
-
-    user = repo_users.get_user_by_telegram_id(telegram_id)
-    if not user:
-        raise NotFound("user")
-
-    cat = repo_cats.get_cat(cat_id, owner_id=user_db_id)
-    if not cat:
-        raise NotFound("cat")
-
-    # شرط لول
-    min_level = int(item.get("min_level", 1))
-    if int(cat.get("level", 1)) < min_level:
-        raise Forbidden("level too low")
-
-    outcome = apply_cat_tick(cat)
-    if not outcome.alive or not outcome.cat:
-        repo_cats.kill_cat(cat_id, owner_id=user_db_id)
-        raise Forbidden("cat is dead")
-
-    points = int(user.get("mew_points", 0))
-    price = int(item.get("price", 0))
-
-    # تخفیف فصلی (نمونه)
-    discount_applied = False
-    if is_christmas_season() and bool(item.get("seasonal", False)):
-        price = int(price * 0.8)
-        discount_applied = True
-
-    if points < price:
-        raise NotEnoughPoints(f"need={price}, have={points}")
-
-    gear_codes = parse_gear_codes(cat.get("gear", ""))
-    if gear_code in gear_codes:
-        raise InvalidInput("already equipped")
-
-    gear_codes.append(gear_code)
-    new_gear_str = ",".join(gear_codes)
-
-    repo_cats.update_cat_stats(cat_id=cat_id, owner_id=user_db_id, gear=new_gear_str)
-    repo_users.update_user_by_telegram_id(telegram_id, mew_points=points - price)
-
-    updated_cat = dict(cat)
-    updated_cat["gear"] = new_gear_str
-    mph_after = compute_mph(updated_cat)
-
-    return {
-        "cat_id": cat_id,
-        "cat_name": cat.get("name"),
-        "gear_code": gear_code,
-        "gear_name": item.get("name"),
-        "price": price,
-        "discount_applied": discount_applied,
-        "points_after": points - price,
-        "mph_after": mph_after,
-    }
-
-
-def fight(my_owner_db_id: int, my_cat_id: int, enemy_cat_id: int) -> Dict[str, Any]:
-    """
-    3 راند. نیاز به لول >= 9 برای هر دو.
-    جایزه: برد => xp+50 و points+100 (اگر کریسمس: *multiplier)
-    """
-    if repo_cats is None or repo_users is None:
-        raise ServiceError("DB repos are not wired.")
-
-    my_cat = repo_cats.get_cat(my_cat_id, owner_id=my_owner_db_id)
-    if not my_cat:
-        raise NotFound("my_cat")
-
-    enemy_cat = repo_cats.get_cat(enemy_cat_id, owner_id=None)
-    if not enemy_cat:
-        raise NotFound("enemy_cat")
-
-    if int(my_cat.get("level", 1)) < 9 or int(enemy_cat.get("level", 1)) < 9:
-        raise Forbidden("both cats must be level >= 9")
-
-    my_stats = compute_effective_stats(my_cat)
-    enemy_stats = compute_effective_stats(enemy_cat)
-
-    my_score = 0
-    enemy_score = 0
-    rounds: List[Dict[str, Any]] = []
-
-    for r in range(1, 4):
-        my_roll = (
-            my_stats["power"] * random.uniform(0.8, 1.2)
-            + my_stats["agility"] * random.uniform(0.5, 1.0)
-            + my_stats["luck"] * random.uniform(0.0, 0.5)
+        self.update_cat(
+            cat_id,
+            owner_id,
+            hunger=new_hunger,
+            happiness=new_happiness,
+            last_tick_ts=int(updated.get("last_tick_ts", int(time.time()))),
         )
-        enemy_roll = (
-            enemy_stats["power"] * random.uniform(0.8, 1.2)
-            + enemy_stats["agility"] * random.uniform(0.5, 1.0)
-            + enemy_stats["luck"] * random.uniform(0.0, 0.5)
-        )
+        self.update_user_points(telegram_id, points - cost)
 
-        if my_roll > enemy_roll:
-            my_score += 1
-            outcome = "win"
-        elif enemy_roll > my_roll:
-            enemy_score += 1
-            outcome = "lose"
-        else:
-            outcome = "draw"
+        return {
+            "cat_name": updated.get("name", "گربه"),
+            "old_hunger": int(updated.get("hunger", 0)),
+            "new_hunger": new_hunger,
+            "old_happiness": int(updated.get("happiness", 0)),
+            "new_happiness": new_happiness,
+            "cost": cost,
+            "new_points": points - cost,
+        }
 
-        rounds.append({"round": r, "my_roll": my_roll, "enemy_roll": enemy_roll, "outcome": outcome})
+    def play_cat(self, owner_id: int, cat_id: int) -> Dict[str, Any]:
+        cat = self.get_cat(cat_id, owner_id)
+        if not cat:
+            raise NotFound("cat_not_found")
 
-    result: str
-    xp_gain = 0
-    points_gain = 0
-    leveled_up = False
+        updated = apply_cat_tick(cat)
+        if not updated:
+            self.kill_cat(cat_id, owner_id)
+            raise CatDead("cat_dead")
 
-    if my_score > enemy_score:
-        result = "win"
-        xp_gain = 50
-        points_gain = 100
+        happiness_gain = 15
+        hunger_loss = 5
+        xp_gain = 25
 
-        if is_christmas_season():
-            xp_gain = int(xp_gain * CHRISTMAS_REWARDS_MULTIPLIER)
-            points_gain = int(points_gain * CHRISTMAS_REWARDS_MULTIPLIER)
+        new_happiness = min(100, int(updated.get("happiness", 0)) + happiness_gain)
+        new_hunger = max(0, int(updated.get("hunger", 0)) - hunger_loss)
 
-        # XP/Level update
-        new_xp = int(my_cat.get("xp", 0)) + xp_gain
-        new_level = int(my_cat.get("level", 1))
+        cur_xp = int(updated.get("xp", 0))
+        cur_level = int(updated.get("level", 1))
+        new_xp = cur_xp + xp_gain
+        new_level = cur_level
+        leveled_up = False
+
         while new_xp >= xp_required_for_level(new_level):
             new_xp -= xp_required_for_level(new_level)
             new_level += 1
             leveled_up = True
 
-        repo_cats.update_cat_stats(
-            cat_id=my_cat_id,
-            owner_id=my_owner_db_id,
+        self.update_cat(
+            cat_id,
+            owner_id,
+            hunger=new_hunger,
+            happiness=new_happiness,
             xp=new_xp,
             level=new_level,
-            happiness=min(100, int(my_cat.get("happiness", 100)) + 20),
+            last_tick_ts=int(updated.get("last_tick_ts", int(time.time()))),
         )
 
-        # points update
-        owner = repo_users.get_user_by_db_id(my_owner_db_id)
-        if owner:
-            repo_users.update_user_by_db_id(my_owner_db_id, mew_points=int(owner.get("mew_points", 0)) + points_gain)
+        return {
+            "cat_name": updated.get("name", "گربه"),
+            "old_hunger": int(updated.get("hunger", 0)),
+            "new_hunger": new_hunger,
+            "old_happiness": int(updated.get("happiness", 0)),
+            "new_happiness": new_happiness,
+            "xp_gain": xp_gain,
+            "new_xp": new_xp,
+            "old_level": cur_level,
+            "new_level": new_level,
+            "leveled_up": leveled_up,
+        }
 
-        _award_achievement(my_owner_db_id, "warrior")
+    def train_cat(self, telegram_id: int, owner_id: int, cat_id: int, stat: str) -> Dict[str, Any]:
+        stat = stat.strip().lower()
+        if stat not in {"power", "agility", "luck"}:
+            raise ValidationError("stat_invalid")
 
-    elif enemy_score > my_score:
-        result = "lose"
-        repo_cats.update_cat_stats(
-            cat_id=my_cat_id,
-            owner_id=my_owner_db_id,
-            happiness=max(0, int(my_cat.get("happiness", 100)) - 10),
-        )
-    else:
-        result = "draw"
-        repo_cats.update_cat_stats(
-            cat_id=my_cat_id,
-            owner_id=my_owner_db_id,
-            xp=int(my_cat.get("xp", 0)) + 10,
-        )
+        user = self.get_user_by_tg(telegram_id)
+        if not user:
+            raise ServiceError("user load failed")
+        points = int(user.get("mew_points", 0))
 
-    return {
-        "result": result,
-        "my_score": my_score,
-        "enemy_score": enemy_score,
-        "rounds": rounds,
-        "xp_gain": xp_gain,
-        "points_gain": points_gain,
-        "leveled_up": leveled_up,
-        "my_cat": {"id": my_cat_id, "name": my_cat.get("name")},
-        "enemy_cat": {"id": enemy_cat_id, "name": enemy_cat.get("name")},
-    }
+        cat = self.get_cat(cat_id, owner_id)
+        if not cat:
+            raise NotFound("cat_not_found")
+
+        updated = apply_cat_tick(cat)
+        if not updated:
+            self.kill_cat(cat_id, owner_id)
+            raise CatDead("cat_dead")
+
+        field = f"stat_{stat}"
+        current_stat = int(updated.get(field, 1))
+        cost = current_stat * 100
+        if points < cost:
+            raise NotEnoughPoints(f"need={cost},have={points}")
+
+        new_stat = current_stat + 1
+        self.update_cat(cat_id, owner_id, **{field: new_stat})
+        self.update_user_points(telegram_id, points - cost)
+
+        return {
+            "cat_name": updated.get("name", "گربه"),
+            "stat": stat,
+            "old_value": current_stat,
+            "new_value": new_stat,
+            "cost": cost,
+            "new_points": points - cost,
+        }
+
+    def rename_cat(self, owner_id: int, cat_id: int, new_name: str) -> Dict[str, Any]:
+        new_name = (new_name or "").strip()
+        if not new_name or len(new_name) > 32:
+            raise ValidationError("name_invalid")
+
+        cat = self.get_cat(cat_id, owner_id)
+        if not cat:
+            raise NotFound("cat_not_found")
+
+        updated = apply_cat_tick(cat)
+        if not updated:
+            self.kill_cat(cat_id, owner_id)
+            raise CatDead("cat_dead")
+
+        old_name = str(updated.get("name", "گربه"))
+        self.update_cat(cat_id, owner_id, name=new_name)
+        return {"old_name": old_name, "new_name": new_name}
+
+    def buy_gear(self, telegram_id: int, owner_id: int, cat_id: int, gear_code: str) -> Dict[str, Any]:
+        gear_code = gear_code.strip().lower()
+        item = GEAR_ITEMS.get(gear_code)
+        if not item:
+            raise ValidationError("gear_invalid")
+
+        user = self.get_user_by_tg(telegram_id)
+        if not user:
+            raise ServiceError("user load failed")
+        points = int(user.get("mew_points", 0))
+
+        cat = self.get_cat(cat_id, owner_id)
+        if not cat:
+            raise NotFound("cat_not_found")
+
+        updated = apply_cat_tick(cat)
+        if not updated:
+            self.kill_cat(cat_id, owner_id)
+            raise CatDead("cat_dead")
+
+        if int(updated.get("level", 1)) < int(item.get("min_level", 1)):
+            raise ValidationError("level_too_low")
+
+        price = int(item.get("price", 0))
+        if points < price:
+            raise NotEnoughPoints(f"need={price},have={points}")
+
+        gear_codes = parse_gear_codes(updated.get("gear", ""))
+        if gear_code in gear_codes:
+            raise ValidationError("gear_already_equipped")
+
+        gear_codes.append(gear_code)
+        new_gear_str = ",".join(gear_codes)
+
+        self.update_cat(cat_id, owner_id, gear=new_gear_str)
+        self.update_user_points(telegram_id, points - price)
+
+        refreshed = dict(updated)
+        refreshed["gear"] = new_gear_str
+        mph = compute_cat_mph(refreshed)
+
+        return {
+            "cat_name": updated.get("name", "گربه"),
+            "gear_code": gear_code,
+            "gear_name": str(item.get("name", gear_code)),
+            "price": price,
+            "new_points": points - price,
+            "new_mph": mph,
+        }
 
 
-def transfer_cat(from_owner_db_id: int, cat_id: int, target_user_db_id: int) -> Dict[str, Any]:
-    """
-    انتقال مالکیت گربه.
-    """
-    if repo_cats is None:
-        raise ServiceError("DB repos are not wired (repo_cats).")
-
-    cat = repo_cats.get_cat(cat_id, owner_id=from_owner_db_id)
-    if not cat:
-        raise NotFound("cat not owned")
-
-    outcome = apply_cat_tick(cat)
-    if not outcome.alive or not outcome.cat:
-        repo_cats.kill_cat(cat_id, owner_id=from_owner_db_id)
-        raise Forbidden("cat is dead")
-
-    ok = repo_cats.set_cat_owner(cat_id, target_user_db_id)
-    if not ok:
-        raise ServiceError("transfer failed")
-
-    if is_christmas_season():
-        _award_achievement(from_owner_db_id, "gift_giver")
-
-    return {
-        "cat_id": cat_id,
-        "cat_name": cat.get("name"),
-        "from_owner_db_id": from_owner_db_id,
-        "to_owner_db_id": target_user_db_id,
-    }
+# Singleton (برای اینکه handlerها راحت import کنند)
+cats_service = CatsService()
