@@ -1,1 +1,21 @@
+from aiogram import types
+from aiogram.dispatcher import Dispatcher
+
+from services.economy import mew_action
+from utils.time import format_mm_ss
+
+
+def register(dp: Dispatcher):
+    @dp.message_handler(lambda m: m.text and m.text.strip().lower() == "mew")
+    async def mew_text(message: types.Message):
+        user_tg = message.from_user.id
+        username = message.from_user.username
+
+        res = mew_action(user_tg, username)
+
+        if not res.ok:
+            await message.reply(f"⏳ باید {format_mm_ss(res.cooldown_left)} صبر کنی.\n💰 امتیاز فعلی: {res.total}")
+            return
+
+        await message.reply(f"😺 میو!\n🎁 {res.gained} امتیاز گرفتی.\n💰 مجموع: {res.total}")
 
