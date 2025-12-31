@@ -1,15 +1,19 @@
+# handlers/__init__.py
+from __future__ import annotations
+
 from aiogram.dispatcher import Dispatcher
-from handlers import start
-from handlers import mew
-from handlers import profile
-from handlers import cats
-from handlers import leaderboard
-from handlers import market
-from handlers import clan
-from handlers import achievements
+
+from . import start
+from . import mew
+from . import profile
+from . import cats
+from . import leaderboard
+from . import market
+from . import clan
+from . import achievements
 
 
-def register_all(dp: Dispatcher):
+def register_all(dp: Dispatcher) -> None:
     start.register(dp)
     mew.register(dp)
     profile.register(dp)
