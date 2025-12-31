@@ -4,14 +4,23 @@ from __future__ import annotations
 from aiogram import Dispatcher, types
 from aiogram.types import Message
 
-from services import cats as cats_mod
+from services.cats import (
+    cats_service,
+    GEAR_ITEMS,
+    rarity_emoji,
+    xp_required_for_level,
+    ValidationError,
+    NotEnoughPoints,
+    NotFound,
+    CatDead,
+)
 
 
 # -------------------------
-# Small helpers
+# Helpers
 # -------------------------
 def _parse_need_have(err_text: str) -> tuple[int | None, int | None]:
-    # err_text نمونه: "need=200,have=50"
+    # نمونه متن: "need=200,have=50"
     need = None
     have = None
     try:
@@ -26,16 +35,23 @@ def _parse_need_have(err_text: str) -> tuple[int | None, int | None]:
     return (need, have)
 
 
+async def _reply(message: Message, text: str) -> None:
+    await message.reply(text, parse_mode=types.ParseMode.HTML)
+
+
 def _fmt_cat_line(i: int, c: dict) -> str:
     rarity = str(c.get("rarity", "common"))
-    emoji = cats_mod.rarity_emoji(rarity)
+    emoji = rarity_emoji(rarity)
     name = str(c.get("name", "گربه"))
     cid = c.get("id", "?")
+
     hunger = int(c.get("hunger", 0))
     happy = int(c.get("happiness", 0))
+
     lvl = int(c.get("level", 1))
     xp = int(c.get("xp", 0))
-    need = cats_mod.xp_required_for_level(lvl)
+    need = xp_required_for_level(lvl)
+
     mph = float(c.get("mph", 0.0))
 
     return (
@@ -46,10 +62,6 @@ def _fmt_cat_line(i: int, c: dict) -> str:
     )
 
 
-async def _reply(message: Message, text: str) -> None:
-    await message.reply(text, parse_mode=types.ParseMode.HTML)
-
-
 # -------------------------
 # Commands
 # -------------------------
@@ -57,16 +69,15 @@ async def cmd_adopt(message: Message) -> None:
     # /adopt [rarity]
     tg = message.from_user.id
     username = message.from_user.username
-
     arg = (message.get_args() or "").strip().lower()
     rarity = arg if arg else None
 
     try:
-        res = cats_mod.cats_service.adopt_cat(tg, username, rarity=rarity)
-    except cats_mod.ValidationError:
+        res = cats_service.adopt_cat(tg, username, rarity=rarity)
+    except ValidationError:
         await _reply(message, "❌ نوع گربه نامعتبر است.\nانواع: common, rare, epic, legendary, mythic, special")
         return
-    except cats_mod.NotEnoughPoints as e:
+    except NotEnoughPoints as e:
         need, have = _parse_need_have(str(e))
         if need is not None and have is not None:
             await _reply(message, f"❌ امتیاز کافی نیست!\n💰 نیاز: {need} | 💎 دارایی: {have}")
@@ -78,10 +89,9 @@ async def cmd_adopt(message: Message) -> None:
         return
 
     r = res["rarity"]
-    cat_name = f"گربهٔ {r}"
     text = (
         "🎉 <b>گربه جدید گرفتی!</b>\n\n"
-        f"{cats_mod.rarity_emoji(r)} <b>{cat_name}</b>\n"
+        f"{rarity_emoji(r)} <b>گربهٔ {r}</b>\n"
         f"🎯 عنصر: {res['element']}\n"
         f"✨ خوی: {res['trait']}\n"
         f"💰 قیمت: {res['price']} امتیاز\n"
@@ -97,8 +107,8 @@ async def cmd_cats(message: Message) -> None:
     username = message.from_user.username
 
     try:
-        owner_id = cats_mod.cats_service.get_or_create_user_id(tg, username)
-        data = cats_mod.cats_service.list_cats_and_tick(owner_id)
+        owner_id = cats_service.get_or_create_user_id(tg, username)
+        data = cats_service.list_cats_and_tick(owner_id)
     except Exception:
         await _reply(message, "❌ خطای داخلی در /cats.")
         return
@@ -146,22 +156,22 @@ async def cmd_feed(message: Message) -> None:
         return
 
     try:
-        owner_id = cats_mod.cats_service.get_or_create_user_id(tg, username)
-        res = cats_mod.cats_service.feed_cat(tg, owner_id, cat_id, amount)
-    except cats_mod.ValidationError:
+        owner_id = cats_service.get_or_create_user_id(tg, username)
+        res = cats_service.feed_cat(tg, owner_id, cat_id, amount)
+    except ValidationError:
         await _reply(message, "❌ مقدار باید بین ۱ تا ۱۰۰ باشد.")
         return
-    except cats_mod.NotEnoughPoints as e:
+    except NotEnoughPoints as e:
         need, have = _parse_need_have(str(e))
         if need is not None and have is not None:
             await _reply(message, f"❌ امتیاز کافی نیست!\n💰 نیاز: {need} | 💎 دارایی: {have}")
         else:
             await _reply(message, "❌ امتیاز کافی نیست!")
         return
-    except cats_mod.NotFound:
+    except NotFound:
         await _reply(message, "❌ گربه پیدا نشد یا مال تو نیست.")
         return
-    except cats_mod.CatDead:
+    except CatDead:
         await _reply(message, "😿 این گربه مرده است!")
         return
     except Exception:
@@ -195,12 +205,12 @@ async def cmd_play(message: Message) -> None:
         return
 
     try:
-        owner_id = cats_mod.cats_service.get_or_create_user_id(tg, username)
-        res = cats_mod.cats_service.play_cat(owner_id, cat_id)
-    except cats_mod.NotFound:
+        owner_id = cats_service.get_or_create_user_id(tg, username)
+        res = cats_service.play_cat(owner_id, cat_id)
+    except NotFound:
         await _reply(message, "❌ گربه پیدا نشد یا مال تو نیست.")
         return
-    except cats_mod.CatDead:
+    except CatDead:
         await _reply(message, "😿 این گربه مرده است!")
         return
     except Exception:
@@ -238,22 +248,22 @@ async def cmd_train(message: Message) -> None:
     stat = args[1].strip().lower()
 
     try:
-        owner_id = cats_mod.cats_service.get_or_create_user_id(tg, username)
-        res = cats_mod.cats_service.train_cat(tg, owner_id, cat_id, stat)
-    except cats_mod.ValidationError:
+        owner_id = cats_service.get_or_create_user_id(tg, username)
+        res = cats_service.train_cat(tg, owner_id, cat_id, stat)
+    except ValidationError:
         await _reply(message, "❌ استت نامعتبر است. موارد مجاز: power, agility, luck")
         return
-    except cats_mod.NotEnoughPoints as e:
+    except NotEnoughPoints as e:
         need, have = _parse_need_have(str(e))
         if need is not None and have is not None:
             await _reply(message, f"❌ امتیاز کافی نیست!\n💰 نیاز: {need} | 💎 دارایی: {have}")
         else:
             await _reply(message, "❌ امتیاز کافی نیست!")
         return
-    except cats_mod.NotFound:
+    except NotFound:
         await _reply(message, "❌ گربه پیدا نشد یا مال تو نیست.")
         return
-    except cats_mod.CatDead:
+    except CatDead:
         await _reply(message, "😿 این گربه مرده است!")
         return
     except Exception:
@@ -288,15 +298,15 @@ async def cmd_rename(message: Message) -> None:
     new_name = args[1].strip()
 
     try:
-        owner_id = cats_mod.cats_service.get_or_create_user_id(tg, username)
-        res = cats_mod.cats_service.rename_cat(owner_id, cat_id, new_name)
-    except cats_mod.ValidationError:
+        owner_id = cats_service.get_or_create_user_id(tg, username)
+        res = cats_service.rename_cat(owner_id, cat_id, new_name)
+    except ValidationError:
         await _reply(message, "❌ نام نامعتبر است (حداکثر ۳۲ کاراکتر).")
         return
-    except cats_mod.NotFound:
+    except NotFound:
         await _reply(message, "❌ گربه پیدا نشد یا مال تو نیست.")
         return
-    except cats_mod.CatDead:
+    except CatDead:
         await _reply(message, "😿 این گربه مرده است!")
         return
     except Exception:
@@ -308,7 +318,7 @@ async def cmd_rename(message: Message) -> None:
 
 async def cmd_shop(message: Message) -> None:
     # /shop
-    items = cats_mod.GEAR_ITEMS or {}
+    items = GEAR_ITEMS or {}
     if not items:
         await _reply(message, "🛒 فعلاً آیتمی در فروشگاه ثبت نشده.")
         return
@@ -352,9 +362,9 @@ async def cmd_buygear(message: Message) -> None:
     gear_code = args[1].strip().lower()
 
     try:
-        owner_id = cats_mod.cats_service.get_or_create_user_id(tg, username)
-        res = cats_mod.cats_service.buy_gear(tg, owner_id, cat_id, gear_code)
-    except cats_mod.ValidationError as e:
+        owner_id = cats_service.get_or_create_user_id(tg, username)
+        res = cats_service.buy_gear(tg, owner_id, cat_id, gear_code)
+    except ValidationError as e:
         key = str(e)
         if key == "gear_invalid":
             await _reply(message, "❌ کد آیتم نامعتبر است. /shop را چک کن.")
@@ -365,17 +375,17 @@ async def cmd_buygear(message: Message) -> None:
         else:
             await _reply(message, "❌ درخواست نامعتبر.")
         return
-    except cats_mod.NotEnoughPoints as e:
+    except NotEnoughPoints as e:
         need, have = _parse_need_have(str(e))
         if need is not None and have is not None:
             await _reply(message, f"❌ امتیاز کافی نیست!\n💰 نیاز: {need} | 💎 دارایی: {have}")
         else:
             await _reply(message, "❌ امتیاز کافی نیست!")
         return
-    except cats_mod.NotFound:
+    except NotFound:
         await _reply(message, "❌ گربه پیدا نشد یا مال تو نیست.")
         return
-    except cats_mod.CatDead:
+    except CatDead:
         await _reply(message, "😿 این گربه مرده است!")
         return
     except Exception:
