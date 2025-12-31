@@ -1,3 +1,4 @@
+# services/market.py
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Optional, List, Dict, Any
@@ -6,6 +7,8 @@ from db.repo_users import get_or_create_user, get_user_by_db_id
 from db.repo_cats import get_cat
 from db import repo_market
 from domain.constants import rarity_emoji
+
+from services.achievements import award_achievement
 
 
 @dataclass(frozen=True)
@@ -120,6 +123,25 @@ def market_buy(user_tg: int, username: Optional[str], listing_id: int) -> Market
     cat = get_cat(cat_id, buyer_id) or get_cat(cat_id)
     cat_name = (cat.get("name") if cat else f"گربه {cat_id}")
 
+    # Achievement: market_king (برای SELLER، چون «اولین فروش موفق» است)
+    ach_msg = ""
+    try:
+        seller_db_id = int(result["seller_id"])
+        # award_achievement ورودی user_tg می‌خواهد؛ ما TG نداریم، پس از این مسیر استفاده نمی‌کنیم.
+        # راه درست: یک تابع award_by_db_id بسازیم. اما در مرحله ۱۲ بدون تغییر زیاد،
+        # یک راه امن: از repo_users اطلاعات seller را بگیریم و با telegram_id جایزه بدهیم.
+        from db.repo_users import get_user_by_db_id  # import local to avoid cycles
+        seller = get_user_by_db_id(seller_db_id)
+        if seller:
+            seller_tg = int(seller.get("telegram_id") or 0)
+            seller_un = seller.get("username")
+            if seller_tg:
+                ach_res = award_achievement(seller_tg, seller_un, "market_king")
+                if "دستاورد جدید" in ach_res.message:
+                    ach_msg = "\n\n" + ach_res.message
+    except Exception:
+        ach_msg = ""
+
     return MarketResult(
         True,
         "🎉 خرید موفق!\n"
@@ -128,5 +150,5 @@ def market_buy(user_tg: int, username: Optional[str], listing_id: int) -> Market
         f"💰 پرداختی: {result['price']}\n"
         f"📉 کارمزد: {result['fee']}\n"
         "گربه الان مال توست."
+        + ach_msg
     )
-
