@@ -1,4 +1,6 @@
 # services/market.py
+from __future__ import annotations
+
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Optional, List, Dict, Any
@@ -119,28 +121,19 @@ def market_buy(user_tg: int, username: Optional[str], listing_id: int) -> Market
     if not result:
         return MarketResult(False, "❌ خرید ناموفق (آگهی/موجودی/منقضی/خرید از خودت).")
 
+    # ---- Achievements (market_king) ----
+    # شرط: اولین فروش موفق (برای فروشنده)
+    seller_db_id = int(result["seller_id"])
+    seller_user = get_user_by_db_id(seller_db_id)
+    seller_tg = int(seller_user["telegram_id"]) if seller_user and seller_user.get("telegram_id") else None
+    seller_username = seller_user.get("username") if seller_user else None
+    if seller_tg is not None:
+        # اگر قبلاً گرفته باشد، خودش پیام "از قبل داشتی" می‌دهد و مشکلی نیست
+        award_achievement(seller_tg, seller_username, "market_king")
+
     cat_id = int(result["cat_id"])
     cat = get_cat(cat_id, buyer_id) or get_cat(cat_id)
     cat_name = (cat.get("name") if cat else f"گربه {cat_id}")
-
-    # Achievement: market_king (برای SELLER، چون «اولین فروش موفق» است)
-    ach_msg = ""
-    try:
-        seller_db_id = int(result["seller_id"])
-        # award_achievement ورودی user_tg می‌خواهد؛ ما TG نداریم، پس از این مسیر استفاده نمی‌کنیم.
-        # راه درست: یک تابع award_by_db_id بسازیم. اما در مرحله ۱۲ بدون تغییر زیاد،
-        # یک راه امن: از repo_users اطلاعات seller را بگیریم و با telegram_id جایزه بدهیم.
-        from db.repo_users import get_user_by_db_id  # import local to avoid cycles
-        seller = get_user_by_db_id(seller_db_id)
-        if seller:
-            seller_tg = int(seller.get("telegram_id") or 0)
-            seller_un = seller.get("username")
-            if seller_tg:
-                ach_res = award_achievement(seller_tg, seller_un, "market_king")
-                if "دستاورد جدید" in ach_res.message:
-                    ach_msg = "\n\n" + ach_res.message
-    except Exception:
-        ach_msg = ""
 
     return MarketResult(
         True,
@@ -150,5 +143,4 @@ def market_buy(user_tg: int, username: Optional[str], listing_id: int) -> Market
         f"💰 پرداختی: {result['price']}\n"
         f"📉 کارمزد: {result['fee']}\n"
         "گربه الان مال توست."
-        + ach_msg
     )
