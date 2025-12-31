@@ -5,6 +5,7 @@ from handlers import profile
 from handlers import cats
 from handlers import leaderboard
 from handlers import market
+from handlers import clan
 
 
 def register_all(dp: Dispatcher):
@@ -14,3 +15,4 @@ def register_all(dp: Dispatcher):
     cats.register(dp)
     leaderboard.register(dp)
     market.register(dp)
+    clan.register(dp)
