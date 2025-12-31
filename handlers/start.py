@@ -11,8 +11,9 @@ def register(dp: Dispatcher):
             "- mew (متنی)\n"
             "- /profile\n"
             "- /adopt [rarity]\n"
-            "- /cats (با XP)\n"
+            "- /cats\n"
             "- /feed <cat_id> <amount>\n"
             "- /play <cat_id>\n"
             "- /leaderboard\n"
+            "- /market (بازار)\n"
         )
