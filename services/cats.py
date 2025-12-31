@@ -12,6 +12,7 @@ from domain.constants import (
 from db.repo_users import get_or_create_user, get_user_by_tg, update_user_fields
 from db.repo_cats import add_cat, list_user_cats, get_cat, kill_cat
 from services.cat_tick import apply_cat_tick, persist_tick
+from services.xp import xp_required_for_level, apply_xp
 
 
 @dataclass(frozen=True)
@@ -82,9 +83,14 @@ def get_my_cats_text(user_db_id: int) -> str:
 
         persist_tick(user_db_id, updated)
 
+        lvl = int(updated.get("level", 1))
+        xp = int(updated.get("xp", 0))
+        need = xp_required_for_level(lvl)
+
         lines.append(
             f"{i}. {rarity_emoji(updated.get('rarity','common'))} {updated.get('name')} "
-            f"(ID: {updated.get('id')}) | lvl: {updated.get('level',1)}\n"
+            f"(ID: {updated.get('id')}) | lvl: {lvl}\n"
+            f"   ⭐ XP: {xp}/{need}\n"
             f"   🍗 گرسنگی: {updated.get('hunger',0)}/100 | 😊 خوشحالی: {updated.get('happiness',0)}/100"
         )
 
@@ -172,14 +178,8 @@ def play_cat(user_tg: int, username: Optional[str], cat_id: int) -> PlayResult:
 
     new_hp = min(100, old_hp + happiness_gain)
     new_h = max(0, old_h - hunger_loss)
-    new_xp = old_xp + xp_gain
-    new_lvl = old_lvl
 
-    # level up ساده v1
-    # هر لول 100xp ثابت (فعلاً)
-    while new_xp >= 100:
-        new_xp -= 100
-        new_lvl += 1
+    new_lvl, new_xp, leveled_up = apply_xp(old_lvl, old_xp, xp_gain)
 
     persist_tick(
         user_db_id,
@@ -192,12 +192,17 @@ def play_cat(user_tg: int, username: Optional[str], cat_id: int) -> PlayResult:
         },
     )
 
+    need = xp_required_for_level(new_lvl)
+
     msg = (
         "🎮 بازی کردی!\n"
         f"🆔 گربه: {cat_id}\n"
         f"😊 خوشحالی: {old_hp} → {new_hp}\n"
         f"🍗 گرسنگی: {old_h} → {new_h}\n"
-        f"⭐ XP: {old_xp} → {new_xp}\n"
+        f"⭐ XP: {old_xp} → {new_xp} (/{need})\n"
         f"⬆️ لول: {old_lvl} → {new_lvl}"
     )
+    if leveled_up:
+        msg += "\n🎉 لول آپ!"
+
     return PlayResult(True, msg)
