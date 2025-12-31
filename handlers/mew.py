@@ -14,8 +14,14 @@ def register(dp: Dispatcher):
         res = mew_action(user_tg, username)
 
         if not res.ok:
-            await message.reply(f"⏳ باید {format_mm_ss(res.cooldown_left)} صبر کنی.\n💰 امتیاز فعلی: {res.total}")
+            text = f"⏳ باید {format_mm_ss(res.cooldown_left)} صبر کنی.\n💰 امتیاز فعلی: {res.total}"
+            if res.passive_gained > 0:
+                text += f"\n💤 +{res.passive_gained} درآمد غیرفعال"
+            await message.reply(text)
             return
 
-        await message.reply(f"😺 میو!\n🎁 {res.gained} امتیاز گرفتی.\n💰 مجموع: {res.total}")
-
+        text = f"😺 میو!\n🎁 {res.gained} امتیاز گرفتی."
+        if res.passive_gained > 0:
+            text += f"\n💤 +{res.passive_gained} درآمد غیرفعال"
+        text += f"\n💰 مجموع: {res.total}"
+        await message.reply(text)
