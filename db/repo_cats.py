@@ -54,3 +54,39 @@ def get_cat(cat_id: int, owner_id: Optional[int] = None) -> Optional[Dict[str, A
         row = cur.fetchone()
         return dict(row) if row else None
 
+
+def update_cat_fields(cat_id: int, owner_id: Optional[int] = None, **kwargs) -> None:
+    if not kwargs:
+        return
+
+    allowed = {
+        "hunger",
+        "happiness",
+        "xp",
+        "level",
+        "gear",
+        "stat_power",
+        "stat_agility",
+        "stat_luck",
+        "last_tick_ts",
+        "alive",
+    }
+    fields = {k: v for k, v in kwargs.items() if k in allowed}
+    if not fields:
+        return
+
+    set_clause = ", ".join(f"{k} = ?" for k in fields.keys())
+    params = list(fields.values())
+    params.append(cat_id)
+
+    with session() as conn:
+        cur = conn.cursor()
+        if owner_id is not None:
+            params.append(owner_id)
+            cur.execute(f"UPDATE cats SET {set_clause} WHERE id = ? AND owner_id = ?", params)
+        else:
+            cur.execute(f"UPDATE cats SET {set_clause} WHERE id = ?", params)
+
+
+def kill_cat(cat_id: int, owner_id: Optional[int] = None) -> None:
+    update_cat_fields(cat_id, owner_id, alive=0)
