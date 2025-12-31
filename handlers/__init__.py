@@ -6,6 +6,7 @@ from handlers import cats
 from handlers import leaderboard
 from handlers import market
 from handlers import clan
+from handlers import achievements
 
 
 def register_all(dp: Dispatcher):
@@ -16,3 +17,4 @@ def register_all(dp: Dispatcher):
     leaderboard.register(dp)
     market.register(dp)
     clan.register(dp)
+    achievements.register(dp)
