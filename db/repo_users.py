@@ -1,5 +1,7 @@
+# db/repo_users.py
 import time
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, List
+
 from db.db import session
 
 
@@ -7,6 +9,14 @@ def get_user_by_tg(telegram_id: int) -> Optional[Dict[str, Any]]:
     with session() as conn:
         cur = conn.cursor()
         cur.execute("SELECT * FROM users WHERE telegram_id = ?", (telegram_id,))
+        row = cur.fetchone()
+        return dict(row) if row else None
+
+
+def get_user_by_db_id(user_id: int) -> Optional[Dict[str, Any]]:
+    with session() as conn:
+        cur = conn.cursor()
+        cur.execute("SELECT * FROM users WHERE id = ?", (user_id,))
         row = cur.fetchone()
         return dict(row) if row else None
 
@@ -44,3 +54,18 @@ def update_user_fields(telegram_id: int, **fields) -> None:
         cur = conn.cursor()
         cur.execute(f"UPDATE users SET {set_clause} WHERE telegram_id = ?", params)
 
+
+def get_leaderboard(limit: int = 10) -> List[Dict[str, Any]]:
+    with session() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            SELECT telegram_id, username, mew_points
+            FROM users
+            ORDER BY mew_points DESC
+            LIMIT ?
+            """,
+            (limit,),
+        )
+        rows = cur.fetchall()
+        return [dict(r) for r in rows]
