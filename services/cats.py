@@ -1,6 +1,7 @@
 import random
 from dataclasses import dataclass
 from typing import Optional, List, Dict, Any
+from services.achievements import award_achievement
 
 from domain.constants import (
     RARITY_CONFIG,
