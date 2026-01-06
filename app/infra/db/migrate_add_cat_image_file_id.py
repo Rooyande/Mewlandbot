@@ -7,7 +7,6 @@ from app.infra.db.session import engine
 
 async def migrate() -> None:
     async with engine.begin() as conn:
-        # اگر ستون وجود نداشت اضافه کن
         await conn.execute(
             text(
                 """
@@ -16,17 +15,17 @@ async def migrate() -> None:
                     IF NOT EXISTS (
                         SELECT 1
                         FROM information_schema.columns
-                        WHERE table_name='cats'
-                          AND column_name='image_file_id'
+                        WHERE table_name='users'
+                          AND column_name='last_claim_at'
                     ) THEN
-                        ALTER TABLE cats ADD COLUMN image_file_id VARCHAR(256);
+                        ALTER TABLE users ADD COLUMN last_claim_at TIMESTAMPTZ;
                     END IF;
                 END$$;
                 """
             )
         )
 
-    print("Migration OK: cats.image_file_id ensured.")
+    print("Migration OK: users.last_claim_at ensured.")
 
 
 if __name__ == "__main__":
