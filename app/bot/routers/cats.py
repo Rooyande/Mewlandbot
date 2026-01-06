@@ -1,6 +1,7 @@
 from aiogram import Router
 from aiogram.filters import Command
 from aiogram.types import Message
+from aiogram.types.input_file import FSInputFile
 from sqlalchemy import select
 
 from app.config.settings import settings
@@ -8,6 +9,7 @@ from app.infra.db.session import AsyncSessionLocal
 from app.domain.users.service import get_or_create_user
 from app.domain.cats.models import Cat, UserCat
 from app.domain.cats.gacha import RarityRates, pick_rarity, pick_cat_from_pool
+from app.domain.cats.renderer import render_cat_image
 
 router = Router()
 
@@ -67,7 +69,6 @@ async def buycat(message: Message) -> None:
         # اگر از آن rarity چیزی نداریم، fallback کنیم (تا خرید fail نشود)
         chosen = pick_cat_from_pool(cats, rarity)
         if chosen is None:
-            # به ترتیب از پایین به بالا fallback
             for r in ["common", "rare", "epic", "legendary", "mythic"]:
                 chosen = pick_cat_from_pool(cats, r)
                 if chosen:
@@ -78,7 +79,6 @@ async def buycat(message: Message) -> None:
             await message.answer("❌ هیچ گربه فعالی پیدا نشد.")
             return
 
-        # هزینه: قیمت خود گربه
         cost = chosen.price_meow
         if user.meow_points < cost:
             await message.answer(
@@ -108,15 +108,22 @@ async def buycat(message: Message) -> None:
         await session.refresh(uc)
 
     emoji = RARITY_EMOJI.get(rarity, "🐱")
-    await message.answer(
+
+    # رندر/آماده‌سازی تصویر
+    img_path = render_cat_image(chosen.base_image_path, title=chosen.name)
+    photo = FSInputFile(str(img_path))
+
+    caption = (
         f"🎉 مبارک!\n"
         f"{emoji} یک گربه **{chosen.name}** گرفتی!\n"
         f"⭐ rarity: **{rarity}**\n"
         f"💸 هزینه: **{cost}**\n"
         f"🪙 امتیاز باقی‌مانده: **{user.meow_points}**\n\n"
-        f"📌 برای دیدن گربه‌هات: /mycats",
-        parse_mode="Markdown",
+        f"📌 برای دیدن گربه‌هات: /mycats\n"
+        f"🔎 جزئیات این گربه: /cat {uc.id}"
     )
+
+    await message.answer_photo(photo=photo, caption=caption, parse_mode="Markdown")
 
 
 @router.message(Command("mycats"))
@@ -127,7 +134,6 @@ async def mycats(message: Message) -> None:
         return
 
     async with AsyncSessionLocal() as session:
-        # کاربر حتما باید وجود داشته باشد
         await get_or_create_user(
             session=session,
             telegram_id=message.from_user.id,
@@ -141,7 +147,6 @@ async def mycats(message: Message) -> None:
             .order_by(UserCat.id.desc())
             .limit(20)
         )
-
         rows = res.all()
 
     if not rows:
