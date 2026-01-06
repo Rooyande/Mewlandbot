@@ -61,7 +61,7 @@ async def calculate_user_rate(session, telegram_id: int) -> RateBreakdown:
 
         elif effect_type == "mps_multiplier":
             # multiplier stacking:
-            # اگر 1.10 باشه و qty=2 → (1.10 ^ 2)
+            # اگر effect_value=1.10 و qty=2 → (1.10 ^ 2)
             multiplier *= float(effect_value) ** qty
 
     final_per_sec = (base_per_sec + flat_bonus_per_sec) * multiplier
