@@ -1,236 +1,300 @@
+from __future__ import annotations
+
+from datetime import datetime, timezone
+
 from aiogram import Router
 from aiogram.filters import Command
 from aiogram.types import Message
-from sqlalchemy import func, select
 
 from app.config.settings import settings
-from app.infra.db.session import AsyncSessionLocal
 from app.domain.users.service import get_or_create_user
-from app.domain.cats.models import UserCat, Cat
+from app.domain.cats.service import get_user_cats
+from app.domain.items.service import list_shop_items, buy_item, get_user_items
+from app.domain.economy.rate_service import calculate_user_rate
 from app.domain.economy.offline_income import apply_offline_income
+
+from app.infra.db.session import AsyncSessionLocal
+
 
 router = Router()
 
 
-def _is_private_and_not_admin(message: Message) -> bool:
-    return (
-        message.chat.type == "private"
-        and message.from_user is not None
-        and message.from_user.id != settings.admin_telegram_id
-    )
+def _is_private_chat(message: Message) -> bool:
+    return message.chat.type == "private"
 
 
 def _is_allowed_group(message: Message) -> bool:
-    if message.chat.type not in ("group", "supergroup"):
-        return True
-
-    allowed = settings.allowed_chat_id_set()
-    if not allowed:
-        return True
-    return message.chat.id in allowed
+    if message.chat.id is None:
+        return False
+    return str(message.chat.id) in settings.allowed_chat_ids
 
 
-def _format_duration(seconds: int) -> str:
-    if seconds <= 0:
-        return "0s"
-    h = seconds // 3600
-    m = (seconds % 3600) // 60
-    s = seconds % 60
-    parts = []
-    if h:
-        parts.append(f"{h}h")
-    if m:
-        parts.append(f"{m}m")
-    if s and not h:
-        parts.append(f"{s}s")
-    return " ".join(parts)
-
-
-async def _calc_total_rate_per_sec(session, telegram_id: int) -> float:
-    """
-    نرخ تولید کاربر را از روی گربه‌ها حساب می‌کند.
-    هر گربه: base_meow_amount / base_meow_interval_sec
-    """
-    gen_res = await session.execute(
-        select(Cat.base_meow_amount, Cat.base_meow_interval_sec)
-        .join(UserCat, UserCat.cat_id == Cat.id)
-        .where(UserCat.user_telegram_id == telegram_id)
-        .where(UserCat.is_alive == True)  # noqa: E712
-        .where(UserCat.is_left == False)  # noqa: E712
-    )
-    rows = gen_res.all()
-
-    total_per_sec = 0.0
-    for amount, interval_sec in rows:
-        if interval_sec and interval_sec > 0:
-            total_per_sec += float(amount) / float(interval_sec)
-
-    return total_per_sec
-
+# -------------------------
+# /start , /help
+# -------------------------
 
 @router.message(Command("start"))
 async def start(message: Message) -> None:
-    if _is_private_and_not_admin(message):
-        return
-    if not _is_allowed_group(message):
-        return
-
-    await message.answer(
-        "👋 سلام!\n"
-        "🐾 به دنیای Meow خوش اومدی.\n\n"
-        "📌 دستورها:\n"
-        "• /profile → پروفایل\n"
-        "• /claim → دریافت درآمد آفلاین\n"
-        "• /mps → نرخ تولید (meow/sec)\n"
-        "• /buycat → خرید گربه\n"
-        "• /mycats → گربه‌های من\n"
-        "• /shop → فروشگاه آیتم‌ها\n"
-        "• /help → راهنما"
+    text = (
+        "👋 سلام! به Meowland خوش اومدی.\n\n"
+        "📌 تو گروه‌های مجاز با گفتن `meow` می‌تونی امتیاز جمع کنی.\n"
+        "🐾 با امتیاز می‌تونی گربه بخری و آیتم بگیری.\n\n"
+        "✅ برای دیدن همه دستورها: /help"
     )
+    await message.answer(text)
 
 
 @router.message(Command("help"))
 async def help_cmd(message: Message) -> None:
-    if _is_private_and_not_admin(message):
-        return
-    if not _is_allowed_group(message):
-        return
-
-    await message.answer(
-        "📚 راهنما\n"
-        "────────────\n"
-        "👤 /profile → پروفایل و آمار\n"
-        "💤 /claim → دریافت درآمد آفلاین\n"
-        "⚙️ /mps → نرخ تولید (meow/sec)\n"
-        "🐱 /buycat → خرید گربه با امتیاز\n"
-        "📋 /mycats → لیست گربه‌ها\n"
-        "🛒 /shop → فروشگاه آیتم‌ها\n"
-        "📦 /myitems → آیتم‌های من\n"
-        "🔎 /cat <id> → جزئیات یک گربه\n"
-        "🏷 /namecat <id> <name> → اسم گذاشتن روی گربه\n"
+    # فعلاً ساده؛ آخر کار کامل و حرفه‌ای می‌کنیم (طبق خواسته‌ات)
+    text = (
+        "📖 راهنمای دستورات:\n\n"
+        "👤 /profile — پروفایل و امتیازها\n"
+        "🐱 /mycats — لیست گربه‌های تو\n"
+        "🛒 /shop — فروشگاه آیتم‌ها\n"
+        "🧺 /myitems — آیتم‌های تو\n"
+        "💰 /mps — نرخ تولید meow/sec\n"
+        "⏳ /claim — دریافت درآمد آفلاین\n"
+        "🧾 /buycat — لیست خرید گربه‌ها\n"
+        "✅ /buycat <id> — خرید گربه\n"
+        "✅ /buyitem <id> — خرید آیتم\n"
     )
+    await message.answer(text)
 
 
-@router.message(Command("claim"))
-async def claim(message: Message) -> None:
-    if _is_private_and_not_admin(message):
-        return
-    if not _is_allowed_group(message):
-        return
+# -------------------------
+# MEOW Message (Group only)
+# -------------------------
 
-    async with AsyncSessionLocal() as session:
-        user = await get_or_create_user(
-            session=session,
-            telegram_id=message.from_user.id,
-            username=message.from_user.username,
-        )
+@router.message()
+async def handle_meow(message: Message) -> None:
+    text = (message.text or "").strip().lower()
 
-        result = await apply_offline_income(session, user)
+    # فقط گروه‌های مجاز
+    if message.chat.type in ("group", "supergroup"):
+        if not _is_allowed_group(message):
+            return
 
-    if result.seconds_used == 0:
-        await message.answer(
-            "💤 درآمد آفلاین فعلاً چیزی نداره!\n"
-            "⏳ کمی صبر کن یا گربه‌های بیشتری بگیر 😺"
-        )
-        return
+        if text != "meow":
+            return
 
-    await message.answer(
-        "✅ درآمد آفلاین دریافت شد!\n"
-        "────────────\n"
-        f"⏱ مدت آفلاین محاسبه‌شده: {_format_duration(result.seconds_used)}\n"
-        f"⚙️ نرخ تولید: {result.rate_per_sec * 60:.2f} / دقیقه\n"
-        f"🪙 درآمد دریافت‌شده: +{result.earned} meow\n"
-        "────────────\n"
-        "📌 برای دیدن پروفایل: /profile"
-    )
+        async with AsyncSessionLocal() as session:
+            user = await get_or_create_user(session, message.from_user.id)
 
+            now = datetime.now(timezone.utc)
+            if user.last_meow_at is not None:
+                diff = (now - user.last_meow_at).total_seconds()
+                if diff < 7 * 60:
+                    left = int((7 * 60) - diff)
+                    await message.reply(f"⏳ هنوز زوده! {left} ثانیه دیگه دوباره meow کن 😼")
+                    return
 
-@router.message(Command("mps"))
-async def mps(message: Message) -> None:
-    if _is_private_and_not_admin(message):
-        return
-    if not _is_allowed_group(message):
+            user.meow_points += 1
+            user.last_meow_at = now
+            await session.commit()
+
+        await message.reply("✅ +1 Meow Point 😺")
         return
 
-    async with AsyncSessionLocal() as session:
-        user = await get_or_create_user(
-            session=session,
-            telegram_id=message.from_user.id,
-            username=message.from_user.username,
-        )
-        rate_per_sec = await _calc_total_rate_per_sec(session, user.telegram_id)
+    # جلوگیری از کارکرد در پیوی (در آینده میشه مدیریتش کرد)
+    if _is_private_chat(message):
+        return
 
-    per_min = rate_per_sec * 60
-    per_hour = rate_per_sec * 3600
 
-    await message.answer(
-        "⚙️ نرخ تولید شما\n"
-        "────────────\n"
-        f"⏱ {rate_per_sec:.4f} meow / ثانیه\n"
-        f"🕐 {per_min:.2f} meow / دقیقه\n"
-        f"🕐 {per_hour:.2f} meow / ساعت\n"
-        "────────────\n"
-        "💤 دریافت آفلاین: /claim\n"
-        "👤 پروفایل: /profile"
-    )
-
+# -------------------------
+# /profile
+# -------------------------
 
 @router.message(Command("profile"))
 async def profile(message: Message) -> None:
-    if _is_private_and_not_admin(message):
+    async with AsyncSessionLocal() as session:
+        user = await get_or_create_user(session, message.from_user.id)
+
+        cats = await get_user_cats(session, user.telegram_id)
+        items = await get_user_items(session, user.telegram_id)
+
+        breakdown = await calculate_user_rate(session, user.telegram_id)
+
+        text = (
+            f"👤 پروفایل شما\n\n"
+            f"🆔 ID: `{user.telegram_id}`\n"
+            f"💰 Meow Points: `{user.meow_points}`\n"
+            f"🐱 تعداد گربه‌ها: `{len(cats)}`\n"
+            f"🎒 تعداد آیتم‌ها: `{sum(i.quantity for i in items) if items else 0}`\n\n"
+            f"⚡ تولید (Meow/sec): `{breakdown.final_per_sec:.6f}`\n"
+            f"   🐾 Base: `{breakdown.base_per_sec:.6f}`\n"
+            f"   ➕ Flat: `{breakdown.flat_bonus_per_sec:.6f}`\n"
+            f"   ✖️ Mult: `{breakdown.multiplier:.3f}`\n"
+        )
+    await message.answer(text, parse_mode="Markdown")
+
+
+# -------------------------
+# /mps
+# -------------------------
+
+@router.message(Command("mps"))
+async def mps(message: Message) -> None:
+    async with AsyncSessionLocal() as session:
+        user = await get_or_create_user(session, message.from_user.id)
+        breakdown = await calculate_user_rate(session, user.telegram_id)
+
+    per_sec = breakdown.final_per_sec
+    per_min = per_sec * 60
+    per_hour = per_min * 60
+
+    text = (
+        "⚡ نرخ تولید شما\n\n"
+        f"🐾 Meow/sec: `{per_sec:.6f}`\n"
+        f"🕐 Meow/min: `{per_min:.4f}`\n"
+        f"🕓 Meow/hour: `{per_hour:.2f}`\n\n"
+        f"📌 Base: `{breakdown.base_per_sec:.6f}`\n"
+        f"➕ Flat: `{breakdown.flat_bonus_per_sec:.6f}`\n"
+        f"✖️ Mult: `{breakdown.multiplier:.3f}`\n"
+    )
+    await message.answer(text, parse_mode="Markdown")
+
+
+# -------------------------
+# /claim
+# -------------------------
+
+@router.message(Command("claim"))
+async def claim(message: Message) -> None:
+    async with AsyncSessionLocal() as session:
+        user = await get_or_create_user(session, message.from_user.id)
+        result = await apply_offline_income(session, user)
+
+    if result.seconds_used <= 0:
+        await message.answer("⏳ هنوز چیزی برای claim نداری 😿")
         return
-    if not _is_allowed_group(message):
+
+    await message.answer(
+        f"✅ Claim شد!\n\n"
+        f"⏱ مدت: `{result.seconds_used}` ثانیه\n"
+        f"⚡ Rate: `{result.rate_per_sec:.6f}` meow/sec\n"
+        f"💰 درآمد: `{result.earned}` Meow Points 😺",
+        parse_mode="Markdown",
+    )
+
+
+# -------------------------
+# Cats
+# -------------------------
+
+@router.message(Command("mycats"))
+async def mycats(message: Message) -> None:
+    async with AsyncSessionLocal() as session:
+        user = await get_or_create_user(session, message.from_user.id)
+        cats = await get_user_cats(session, user.telegram_id)
+
+    if not cats:
+        await message.answer("😿 هیچ گربه‌ای نداری. با /buycat یکی بخر.")
+        return
+
+    lines = ["🐱 گربه‌های شما:\n"]
+    for uc in cats:
+        nickname = uc.nickname or uc.cat.name
+        lines.append(f"• `{uc.id}` — {nickname} ({uc.cat.rarity}) lvl {uc.level} 😺")
+
+    await message.answer("\n".join(lines), parse_mode="Markdown")
+
+
+@router.message(Command("buycat"))
+async def buycat_list(message: Message) -> None:
+    async with AsyncSessionLocal() as session:
+        user = await get_or_create_user(session, message.from_user.id)
+        from app.domain.cats.service import list_available_cats  # local import
+        cats = await list_available_cats(session)
+
+    if not cats:
+        await message.answer("😿 فعلاً گربه‌ای برای فروش نیست.")
+        return
+
+    lines = ["🧾 لیست گربه‌ها برای خرید:\n"]
+    for c in cats:
+        lines.append(f"• `{c.id}` — {c.name} ({c.rarity}) 🪙 `{c.price_meow}`")
+
+    lines.append("\n✅ خرید: `/buycat <id>`")
+    await message.answer("\n".join(lines), parse_mode="Markdown")
+
+
+@router.message(Command("buycat"))
+async def buycat_execute(message: Message) -> None:
+    # اگر فقط /buycat بود، handler بالا اجرا میشه.
+    # این handler زمانی اجرا میشه که آرگومان داشته باشه.
+    parts = (message.text or "").split()
+    if len(parts) == 1:
+        return
+
+    try:
+        cat_id = int(parts[1])
+    except ValueError:
+        await message.answer("❌ فرمت غلطه. مثال: `/buycat 3`", parse_mode="Markdown")
         return
 
     async with AsyncSessionLocal() as session:
-        user = await get_or_create_user(
-            session=session,
-            telegram_id=message.from_user.id,
-            username=message.from_user.username,
-        )
+        user = await get_or_create_user(session, message.from_user.id)
+        from app.domain.cats.service import buy_cat  # local import
 
-        # ✅ Claim اتوماتیک قبل از نمایش پروفایل
-        claim_result = await apply_offline_income(session, user)
+        ok, msg = await buy_cat(session, user.telegram_id, cat_id)
 
-        # ✅ تعداد گربه‌های کاربر
-        cats_count_res = await session.execute(
-            select(func.count())
-            .select_from(UserCat)
-            .where(UserCat.user_telegram_id == user.telegram_id)
-        )
-        cats_count = int(cats_count_res.scalar() or 0)
+    await message.answer(msg)
 
-        # ✅ نرخ تولید
-        total_per_sec = await _calc_total_rate_per_sec(session, user.telegram_id)
 
-    per_min = total_per_sec * 60
-    per_hour = total_per_sec * 3600
+# -------------------------
+# Shop Items
+# -------------------------
 
-    username = message.from_user.username or "—"
+@router.message(Command("shop"))
+async def shop(message: Message) -> None:
+    async with AsyncSessionLocal() as session:
+        items = await list_shop_items(session)
 
-    claim_line = ""
-    if claim_result.earned > 0:
-        claim_line = (
-            "\n"
-            "💤 درآمد آفلاین همین الان دریافت شد!\n"
-            f"🪙 +{claim_result.earned} meow (از {_format_duration(claim_result.seconds_used)})\n"
-        )
+    if not items:
+        await message.answer("🛒 فروشگاه خالیه 😿")
+        return
 
-    await message.answer(
-        "👤 پروفایل شما\n"
-        "────────────\n"
-        f"🆔 Telegram ID: {user.telegram_id}\n"
-        f"👤 Username: @{username}\n\n"
-        f"🪙 Meow Points: {user.meow_points}\n"
-        f"🐾 تعداد گربه‌ها: {cats_count}\n\n"
-        "⚙️ تولید آفلاین (از گربه‌ها)\n"
-        f"⏱ {per_min:.2f} meow / دقیقه\n"
-        f"🕐 {per_hour:.2f} meow / ساعت\n"
-        f"{claim_line}"
-        "────────────\n"
-        "🐱 خرید گربه: /buycat\n"
-        "📋 گربه‌ها: /mycats\n"
-        "🛒 شاپ: /shop\n"
-        "💤 دریافت دستی آفلاین: /claim\n"
-        "⚙️ نرخ تولید: /mps"
-    )
+    lines = ["🛒 فروشگاه آیتم‌ها:\n"]
+    for it in items:
+        lines.append(f"• `{it.id}` — {it.name} 🪙 `{it.price_meow}` ({it.effect_type}:{it.effect_value})")
+
+    lines.append("\n✅ خرید: `/buyitem <id>`")
+    await message.answer("\n".join(lines), parse_mode="Markdown")
+
+
+@router.message(Command("buyitem"))
+async def buyitem_cmd(message: Message) -> None:
+    parts = (message.text or "").split()
+    if len(parts) < 2:
+        await message.answer("❌ مثال: `/buyitem 2`", parse_mode="Markdown")
+        return
+
+    try:
+        item_id = int(parts[1])
+    except ValueError:
+        await message.answer("❌ آیتم ID باید عدد باشه.", parse_mode="Markdown")
+        return
+
+    async with AsyncSessionLocal() as session:
+        user = await get_or_create_user(session, message.from_user.id)
+        ok, msg = await buy_item(session, user.telegram_id, item_id)
+
+    await message.answer(msg)
+
+
+@router.message(Command("myitems"))
+async def myitems(message: Message) -> None:
+    async with AsyncSessionLocal() as session:
+        user = await get_or_create_user(session, message.from_user.id)
+        items = await get_user_items(session, user.telegram_id)
+
+    if not items:
+        await message.answer("🎒 هیچ آیتمی نداری 😿")
+        return
+
+    lines = ["🎒 آیتم‌های شما:\n"]
+    for ui in items:
+        lines.append(f"• {ui.item.name} x{ui.quantity} ✅")
+
+    await message.answer("\n".join(lines))
