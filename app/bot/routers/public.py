@@ -132,4 +132,10 @@ async def handle_text(message: Message) -> None:
         user.last_meow_at = now
         await session.commit()
 
-    await message.answer("✅ +1 Meow Point گرفتی!")
+    await message.answer(
+    f"✅ +1 Meow Point گرفتی!\n"
+    f"امتیاز فعلی: **{user.meow_points}**\n"
+    f"کول‌داون: 7 دقیقه",
+    parse_mode="Markdown",
+)
+
