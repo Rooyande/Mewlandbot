@@ -24,7 +24,7 @@ def _is_allowed_group(message: Message) -> bool:
         return True
 
     allowed = settings.allowed_chat_id_set()
-    # اگر لیست خالی باشد یعنی همه گروه‌ها مجازند (می‌توانی برعکسش هم کنی، ولی فعلاً این ساده‌تر است)
+    # اگر لیست خالی باشد یعنی همه گروه‌ها مجازند
     if not allowed:
         return True
     return message.chat.id in allowed
@@ -57,11 +57,43 @@ async def profile(message: Message) -> None:
             username=message.from_user.username,
         )
 
-    await message.answer(
+    now = datetime.now(timezone.utc)
+    cooldown = timedelta(minutes=7)
+
+    if user.last_meow_at is None:
+        cd_text = "آماده ✅"
+    else:
+        diff = now - user.last_meow_at
+        if diff >= cooldown:
+            cd_text = "آماده ✅"
+        else:
+            remaining = cooldown - diff
+            mins = int(remaining.total_seconds() // 60)
+            secs = int(remaining.total_seconds() % 60)
+            cd_text = f"{mins}:{secs:02d}"
+
+    # Placeholder برای آینده (وقتی cats table اضافه شد واقعی می‌کنیم)
+    cats_count = 0
+    best_cat = "نداری"
+
+    username = f"@{user.username}" if user.username else "ندارد"
+    created = user.created_at.strftime("%Y-%m-%d %H:%M")
+
+    text = (
         "پروفایل شما\n"
-        f"Meow Points: {user.meow_points}\n"
-        f"User: @{user.username or 'unknown'}"
+        "────────────\n"
+        f"شناسه: `{user.telegram_id}`\n"
+        f"یوزرنیم: {username}\n"
+        f"Meow Points: **{user.meow_points}**\n"
+        f"Cooldown: {cd_text}\n"
+        "────────────\n"
+        f"تعداد گربه‌ها: {cats_count}\n"
+        f"بهترین گربه: {best_cat}\n"
+        "────────────\n"
+        f"ساخته شده: {created} (UTC)\n"
     )
+
+    await message.answer(text, parse_mode="Markdown")
 
 
 @router.message()
