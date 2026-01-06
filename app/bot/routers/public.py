@@ -1,12 +1,12 @@
-from datetime import datetime, timezone, timedelta
-
 from aiogram import Router
-from aiogram.filters import CommandStart, Command
+from aiogram.filters import Command
 from aiogram.types import Message
+from sqlalchemy import func, select
 
 from app.config.settings import settings
 from app.infra.db.session import AsyncSessionLocal
 from app.domain.users.service import get_or_create_user
+from app.domain.cats.models import UserCat, Cat
 
 router = Router()
 
@@ -24,24 +24,44 @@ def _is_allowed_group(message: Message) -> bool:
         return True
 
     allowed = settings.allowed_chat_id_set()
-    # اگر لیست خالی باشد یعنی همه گروه‌ها مجازند
     if not allowed:
         return True
     return message.chat.id in allowed
 
 
-@router.message(CommandStart())
+@router.message(Command("start"))
 async def start(message: Message) -> None:
     if _is_private_and_not_admin(message):
-        await message.answer("⛔ این بات فقط داخل گروه‌های مجاز فعال است.")
         return
-
     if not _is_allowed_group(message):
         return
 
     await message.answer(
-        "✅ بات روشن است.\n🐾 در گروه‌های مجاز با گفتن **meow** امتیاز می‌گیری.",
-        parse_mode="Markdown",
+        "👋 سلام!\n"
+        "🐾 به دنیای Meow خوش اومدی.\n\n"
+        "📌 دستورها:\n"
+        "• /profile → پروفایل\n"
+        "• /buycat → خرید گربه\n"
+        "• /mycats → گربه‌های من\n"
+        "• /help → راهنما"
+    )
+
+
+@router.message(Command("help"))
+async def help_cmd(message: Message) -> None:
+    if _is_private_and_not_admin(message):
+        return
+    if not _is_allowed_group(message):
+        return
+
+    await message.answer(
+        "📚 راهنما\n"
+        "────────────\n"
+        "🐾 /profile → پروفایل و آمار\n"
+        "🐱 /buycat → خرید گربه با امتیاز\n"
+        "📋 /mycats → لیست گربه‌ها\n"
+        "🔎 /cat <id> → جزئیات یک گربه\n"
+        "🏷 /namecat <id> <name> → اسم گذاشتن روی گربه\n"
     )
 
 
@@ -49,7 +69,6 @@ async def start(message: Message) -> None:
 async def profile(message: Message) -> None:
     if _is_private_and_not_admin(message):
         return
-
     if not _is_allowed_group(message):
         return
 
@@ -60,84 +79,46 @@ async def profile(message: Message) -> None:
             username=message.from_user.username,
         )
 
-    now = datetime.now(timezone.utc)
-    cooldown = timedelta(minutes=7)
-
-    if user.last_meow_at is None:
-        cd_text = "آماده ✅"
-    else:
-        diff = now - user.last_meow_at
-        if diff >= cooldown:
-            cd_text = "آماده ✅"
-        else:
-            remaining = cooldown - diff
-            mins = int(remaining.total_seconds() // 60)
-            secs = int(remaining.total_seconds() % 60)
-            cd_text = f"{mins}:{secs:02d}"
-
-    # Placeholder برای آینده (وقتی cats table اضافه شد واقعی می‌کنیم)
-    cats_count = 0
-    best_cat = "نداری"
-
-    username = f"@{user.username}" if user.username else "ندارد"
-    created = user.created_at.strftime("%Y-%m-%d %H:%M")
-
-    text = (
-        "👤 پروفایل شما\n"
-        "────────────\n"
-        f"🆔 شناسه: `{user.telegram_id}`\n"
-        f"🔗 یوزرنیم: {username}\n"
-        f"🪙 Meow Points: **{user.meow_points}**\n"
-        f"⏳ Cooldown: {cd_text}\n"
-        "────────────\n"
-        f"🐱 تعداد گربه‌ها: {cats_count}\n"
-        f"🏆 بهترین گربه: {best_cat}\n"
-        "────────────\n"
-        f"📅 ساخته شده: {created} (UTC)\n"
-    )
-
-    await message.answer(text, parse_mode="Markdown")
-
-
-@router.message()
-async def handle_text(message: Message) -> None:
-    if _is_private_and_not_admin(message):
-        return
-
-    if not _is_allowed_group(message):
-        return
-
-    txt = (message.text or "").strip().lower()
-
-    if txt != "meow":
-        return
-
-    async with AsyncSessionLocal() as session:
-        user = await get_or_create_user(
-            session=session,
-            telegram_id=message.from_user.id,
-            username=message.from_user.username,
+        # ✅ تعداد گربه‌های کاربر
+        cats_count_res = await session.execute(
+            select(func.count())
+            .select_from(UserCat)
+            .where(UserCat.user_telegram_id == user.telegram_id)
         )
+        cats_count = int(cats_count_res.scalar() or 0)
 
-        now = datetime.now(timezone.utc)
-        cooldown = timedelta(minutes=7)
+        # ✅ محاسبه تولید کلی کاربر بر اساس گربه‌ها
+        # تولید هر گربه: base_meow_amount / base_meow_interval_sec
+        gen_res = await session.execute(
+            select(Cat.base_meow_amount, Cat.base_meow_interval_sec)
+            .join(UserCat, UserCat.cat_id == Cat.id)
+            .where(UserCat.user_telegram_id == user.telegram_id)
+            .where(UserCat.is_alive == True)  # noqa: E712
+            .where(UserCat.is_left == False)  # noqa: E712
+        )
+        rows = gen_res.all()
 
-        if user.last_meow_at is not None:
-            diff = now - user.last_meow_at
-            if diff < cooldown:
-                remaining = cooldown - diff
-                mins = int(remaining.total_seconds() // 60)
-                secs = int(remaining.total_seconds() % 60)
-                await message.answer(f"⏳ هنوز کول‌داون داری.\n🕒 {mins}:{secs:02d} دیگه صبر کن.")
-                return
+    total_per_sec = 0.0
+    for amount, interval_sec in rows:
+        if interval_sec and interval_sec > 0:
+            total_per_sec += float(amount) / float(interval_sec)
 
-        user.meow_points += 1
-        user.last_meow_at = now
-        await session.commit()
+    per_min = total_per_sec * 60
+    per_hour = total_per_sec * 3600
+
+    username = message.from_user.username or "—"
 
     await message.answer(
-        f"🐾 **Meow!** ✅ +1 امتیاز گرفتی!\n"
-        f"🪙 امتیاز فعلی: **{user.meow_points}**\n"
-        f"⏳ کول‌داون: 7 دقیقه",
-        parse_mode="Markdown",
+        "👤 پروفایل شما\n"
+        "────────────\n"
+        f"🆔 Telegram ID: {user.telegram_id}\n"
+        f"👤 Username: @{username}\n\n"
+        f"🪙 Meow Points: {user.meow_points}\n"
+        f"🐾 تعداد گربه‌ها: {cats_count}\n\n"
+        "⚙️ تولید آفلاین (از گربه‌ها)\n"
+        f"⏱ {per_min:.2f} meow / دقیقه\n"
+        f"🕐 {per_hour:.2f} meow / ساعت\n"
+        "────────────\n"
+        "🐱 خرید گربه: /buycat\n"
+        "📋 گربه‌ها: /mycats"
     )
