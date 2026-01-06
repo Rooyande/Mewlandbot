@@ -6,6 +6,7 @@ from aiogram import Bot, Dispatcher
 from app.config.settings import settings
 from app.bot.routers.public import router as public_router
 from app.bot.routers.admin import router as admin_router
+from app.bot.routers.admin_cats import router as admin_cats_router
 from app.bot.routers.cats import router as cats_router
 
 
@@ -18,10 +19,10 @@ async def main() -> None:
 
     # routers
     dp.include_router(admin_router)
+    dp.include_router(admin_cats_router)
     dp.include_router(cats_router)
     dp.include_router(public_router)
 
-    # polling
     await dp.start_polling(bot)
 
 
