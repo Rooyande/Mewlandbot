@@ -104,9 +104,6 @@ async def buycat(message: Message) -> None:
 
     emoji = RARITY_EMOJI.get(rarity, "🐱")
 
-    img_path = render_cat_image(chosen.base_image_path, title=chosen.name)
-    photo = FSInputFile(str(img_path))
-
     caption = (
         f"🎉 مبارک!\n"
         f"{emoji} یک گربه **{chosen.name}** گرفتی!\n"
@@ -118,6 +115,14 @@ async def buycat(message: Message) -> None:
         f"🏷 اسم گذاشتن: `/namecat {uc.id} <اسم>`"
     )
 
+    # اگر image_file_id داشت، مستقیم از تلگرام ارسال می‌کنیم
+    if chosen.image_file_id:
+        await message.answer_photo(photo=chosen.image_file_id, caption=caption, parse_mode="Markdown")
+        return
+
+    # اگر نداشت، fallback به placeholder/asset path
+    img_path = render_cat_image(chosen.base_image_path, title=chosen.name)
+    photo = FSInputFile(str(img_path))
     await message.answer_photo(photo=photo, caption=caption, parse_mode="Markdown")
 
 
