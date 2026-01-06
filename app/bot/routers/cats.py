@@ -1,0 +1,210 @@
+from aiogram import Router
+from aiogram.filters import Command
+from aiogram.types import Message
+from sqlalchemy import select
+
+from app.config.settings import settings
+from app.infra.db.session import AsyncSessionLocal
+from app.domain.users.service import get_or_create_user
+from app.domain.cats.models import Cat, UserCat
+from app.domain.cats.gacha import RarityRates, pick_rarity, pick_cat_from_pool
+
+router = Router()
+
+
+def _is_private_and_not_admin(message: Message) -> bool:
+    return (
+        message.chat.type == "private"
+        and message.from_user is not None
+        and message.from_user.id != settings.admin_telegram_id
+    )
+
+
+def _is_allowed_group(message: Message) -> bool:
+    if message.chat.type not in ("group", "supergroup"):
+        return True
+
+    allowed = settings.allowed_chat_id_set()
+    if not allowed:
+        return True
+    return message.chat.id in allowed
+
+
+RARITY_EMOJI = {
+    "common": "⚪",
+    "rare": "🔵",
+    "epic": "🟣",
+    "legendary": "🟠",
+    "mythic": "🔴",
+}
+
+
+@router.message(Command("buycat"))
+async def buycat(message: Message) -> None:
+    if _is_private_and_not_admin(message):
+        return
+    if not _is_allowed_group(message):
+        return
+
+    async with AsyncSessionLocal() as session:
+        user = await get_or_create_user(
+            session=session,
+            telegram_id=message.from_user.id,
+            username=message.from_user.username,
+        )
+
+        # تمام cats فعال
+        res = await session.execute(select(Cat).where(Cat.is_active == True))  # noqa: E712
+        cats = list(res.scalars().all())
+        if not cats:
+            await message.answer("❌ هیچ گربه‌ای برای خرید موجود نیست.")
+            return
+
+        # انتخاب rarity بر اساس نرخ‌ها (فعلاً ثابت - بعداً قابل تنظیم می‌کنیم)
+        rates = RarityRates()
+        rarity = pick_rarity(rates)
+
+        # اگر از آن rarity چیزی نداریم، fallback کنیم (تا خرید fail نشود)
+        chosen = pick_cat_from_pool(cats, rarity)
+        if chosen is None:
+            # به ترتیب از پایین به بالا fallback
+            for r in ["common", "rare", "epic", "legendary", "mythic"]:
+                chosen = pick_cat_from_pool(cats, r)
+                if chosen:
+                    rarity = r
+                    break
+
+        if chosen is None:
+            await message.answer("❌ هیچ گربه فعالی پیدا نشد.")
+            return
+
+        # هزینه: قیمت خود گربه
+        cost = chosen.price_meow
+        if user.meow_points < cost:
+            await message.answer(
+                f"💸 امتیاز کافی نداری!\n"
+                f"🪙 نیاز: **{cost}**\n"
+                f"🪙 داری: **{user.meow_points}**",
+                parse_mode="Markdown",
+            )
+            return
+
+        # کم کردن امتیاز
+        user.meow_points -= cost
+
+        # ثبت گربه برای کاربر
+        uc = UserCat(
+            user_telegram_id=user.telegram_id,
+            cat_id=chosen.id,
+            nickname=None,
+            level=1,
+            happiness=100,
+            hunger=0,
+            is_alive=True,
+            is_left=False,
+        )
+        session.add(uc)
+        await session.commit()
+        await session.refresh(uc)
+
+    emoji = RARITY_EMOJI.get(rarity, "🐱")
+    await message.answer(
+        f"🎉 مبارک!\n"
+        f"{emoji} یک گربه **{chosen.name}** گرفتی!\n"
+        f"⭐ rarity: **{rarity}**\n"
+        f"💸 هزینه: **{cost}**\n"
+        f"🪙 امتیاز باقی‌مانده: **{user.meow_points}**\n\n"
+        f"📌 برای دیدن گربه‌هات: /mycats",
+        parse_mode="Markdown",
+    )
+
+
+@router.message(Command("mycats"))
+async def mycats(message: Message) -> None:
+    if _is_private_and_not_admin(message):
+        return
+    if not _is_allowed_group(message):
+        return
+
+    async with AsyncSessionLocal() as session:
+        # کاربر حتما باید وجود داشته باشد
+        await get_or_create_user(
+            session=session,
+            telegram_id=message.from_user.id,
+            username=message.from_user.username,
+        )
+
+        res = await session.execute(
+            select(UserCat, Cat)
+            .join(Cat, Cat.id == UserCat.cat_id)
+            .where(UserCat.user_telegram_id == message.from_user.id)
+            .order_by(UserCat.id.desc())
+            .limit(20)
+        )
+
+        rows = res.all()
+
+    if not rows:
+        await message.answer("📭 هنوز هیچ گربه‌ای نداری.\nبرای خرید: /buycat")
+        return
+
+    lines = ["🐾 گربه‌های شما (آخرین 20 تا):", "────────────"]
+    for uc, cat in rows:
+        emoji = RARITY_EMOJI.get(cat.rarity, "🐱")
+        nick = f" ({uc.nickname})" if uc.nickname else ""
+        lines.append(f"{emoji} `#{uc.id}` **{cat.name}**{nick}  | lvl {uc.level}")
+
+    lines.append("────────────")
+    lines.append("برای دیدن جزئیات یک گربه: /cat <id>")
+
+    await message.answer("\n".join(lines), parse_mode="Markdown")
+
+
+@router.message(Command("cat"))
+async def cat_detail(message: Message) -> None:
+    if _is_private_and_not_admin(message):
+        return
+    if not _is_allowed_group(message):
+        return
+
+    parts = (message.text or "").strip().split()
+    if len(parts) != 2:
+        await message.answer("⚠️ فرمت درست: `/cat <id>`", parse_mode="Markdown")
+        return
+
+    try:
+        uc_id = int(parts[1])
+    except ValueError:
+        await message.answer("⚠️ id باید عدد باشد.")
+        return
+
+    async with AsyncSessionLocal() as session:
+        res = await session.execute(
+            select(UserCat, Cat)
+            .join(Cat, Cat.id == UserCat.cat_id)
+            .where(UserCat.id == uc_id)
+            .where(UserCat.user_telegram_id == message.from_user.id)
+        )
+        row = res.first()
+
+    if not row:
+        await message.answer("❌ این گربه برای شما نیست یا وجود ندارد.")
+        return
+
+    uc, cat = row
+    emoji = RARITY_EMOJI.get(cat.rarity, "🐱")
+    nick = uc.nickname or "ندارد"
+
+    await message.answer(
+        "🐱 جزئیات گربه\n"
+        "────────────\n"
+        f"{emoji} نام: **{cat.name}**\n"
+        f"⭐ rarity: **{cat.rarity}**\n"
+        f"🏷 نام دلخواه: **{nick}**\n"
+        f"📈 level: **{uc.level}**\n"
+        f"😊 happiness: **{uc.happiness}**\n"
+        f"🍗 hunger: **{uc.hunger}**\n"
+        f"❤️ alive: **{uc.is_alive}**\n"
+        "────────────",
+        parse_mode="Markdown",
+    )
