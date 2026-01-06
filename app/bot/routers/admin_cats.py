@@ -45,16 +45,17 @@ async def listcats(message: Message) -> None:
         await message.answer("📭 هیچ گربه‌ای در دیتابیس نیست.")
         return
 
+    # ✅ بدون Markdown برای جلوگیری از parse error
     lines = ["🐱 لیست گربه‌ها:", "────────────"]
     for c in cats:
         emoji = RARITY_EMOJI.get(c.rarity, "🐱")
         pic = "✅" if c.image_file_id else "❌"
         active = "✅" if c.is_active else "⛔"
         lines.append(
-            f"{emoji} `#{c.id}` **{c.name}** | {c.rarity} | 💸 {c.price_meow} | ⚙️ {c.base_meow_amount}/{c.base_meow_interval_sec}s | 🖼 {pic} | {active}"
+            f"{emoji} #{c.id} | {c.name} | {c.rarity} | 💸 {c.price_meow} | ⚙️ {c.base_meow_amount}/{c.base_meow_interval_sec}s | 🖼 {pic} | {active}"
         )
 
-    await message.answer("\n".join(lines), parse_mode="Markdown")
+    await message.answer("\n".join(lines))
 
 
 @router.message(IsAdmin(), Command("addcat"))
@@ -63,10 +64,9 @@ async def addcat(message: Message) -> None:
     if len(parts) != 6:
         await message.answer(
             "⚠️ فرمت درست:\n"
-            "`/addcat <name> <rarity> <price> <amount> <interval_sec>`\n\n"
+            "/addcat <name> <rarity> <price> <amount> <interval_sec>\n\n"
             "مثال:\n"
-            "`/addcat Snow common 10 1 600`",
-            parse_mode="Markdown",
+            "/addcat Snow common 10 1 600"
         )
         return
 
@@ -103,18 +103,14 @@ async def addcat(message: Message) -> None:
         await session.commit()
         await session.refresh(cat)
 
-    await message.answer(
-        f"✅ گربه اضافه شد.\n"
-        f"🐱 `#{cat.id}` **{cat.name}** | {cat.rarity}",
-        parse_mode="Markdown",
-    )
+    await message.answer(f"✅ گربه اضافه شد: #{cat.id} | {cat.name} | {cat.rarity}")
 
 
 @router.message(IsAdmin(), Command("delcat"))
 async def delcat(message: Message) -> None:
     parts = (message.text or "").strip().split()
     if len(parts) != 2:
-        await message.answer("⚠️ فرمت درست: `/delcat <cat_id>`", parse_mode="Markdown")
+        await message.answer("⚠️ فرمت درست: /delcat <cat_id>")
         return
 
     try:
@@ -127,14 +123,14 @@ async def delcat(message: Message) -> None:
         await session.execute(delete(Cat).where(Cat.id == cat_id))
         await session.commit()
 
-    await message.answer(f"✅ حذف شد: `{cat_id}`", parse_mode="Markdown")
+    await message.answer(f"✅ حذف شد: {cat_id}")
 
 
 @router.message(IsAdmin(), Command("togglecat"))
 async def togglecat(message: Message) -> None:
     parts = (message.text or "").strip().split()
     if len(parts) != 2:
-        await message.answer("⚠️ فرمت درست: `/togglecat <cat_id>`", parse_mode="Markdown")
+        await message.answer("⚠️ فرمت درست: /togglecat <cat_id>")
         return
 
     try:
@@ -154,14 +150,14 @@ async def togglecat(message: Message) -> None:
         await session.commit()
 
     state = "✅ فعال شد" if cat.is_active else "⛔ غیرفعال شد"
-    await message.answer(f"{state}: `{cat_id}`", parse_mode="Markdown")
+    await message.answer(f"{state}: {cat_id}")
 
 
 @router.message(IsAdmin(), Command("setcatprice"))
 async def setcatprice(message: Message) -> None:
     parts = (message.text or "").strip().split()
     if len(parts) != 3:
-        await message.answer("⚠️ فرمت درست: `/setcatprice <cat_id> <price>`", parse_mode="Markdown")
+        await message.answer("⚠️ فرمت درست: /setcatprice <cat_id> <price>")
         return
 
     try:
@@ -180,17 +176,14 @@ async def setcatprice(message: Message) -> None:
         cat.price_meow = price
         await session.commit()
 
-    await message.answer(f"✅ قیمت آپدیت شد: `{cat_id}` → 💸 {price}", parse_mode="Markdown")
+    await message.answer(f"✅ قیمت آپدیت شد: {cat_id} → 💸 {price}")
 
 
 @router.message(IsAdmin(), Command("setcatgen"))
 async def setcatgen(message: Message) -> None:
     parts = (message.text or "").strip().split()
     if len(parts) != 4:
-        await message.answer(
-            "⚠️ فرمت درست: `/setcatgen <cat_id> <amount> <interval_sec>`",
-            parse_mode="Markdown",
-        )
+        await message.answer("⚠️ فرمت درست: /setcatgen <cat_id> <amount> <interval_sec>")
         return
 
     try:
@@ -211,17 +204,14 @@ async def setcatgen(message: Message) -> None:
         cat.base_meow_interval_sec = interval
         await session.commit()
 
-    await message.answer(
-        f"✅ تولید آپدیت شد: `{cat_id}` → ⚙️ {amount}/{interval}s",
-        parse_mode="Markdown",
-    )
+    await message.answer(f"✅ تولید آپدیت شد: {cat_id} → ⚙️ {amount}/{interval}s")
 
 
 @router.message(IsAdmin(), Command("setcatpic"))
 async def setcatpic_start(message: Message, state: FSMContext) -> None:
     parts = (message.text or "").strip().split()
     if len(parts) != 2:
-        await message.answer("⚠️ فرمت درست: `/setcatpic <cat_id>`", parse_mode="Markdown")
+        await message.answer("⚠️ فرمت درست: /setcatpic <cat_id>")
         return
 
     try:
@@ -239,11 +229,7 @@ async def setcatpic_start(message: Message, state: FSMContext) -> None:
 
     await state.set_state(SetCatPicState.waiting_photo)
     await state.update_data(cat_id=cat_id)
-    await message.answer(
-        f"📸 حالا یک عکس بفرست برای گربه `{cat_id}`.\n"
-        f"✅ همینجا عکس رو بفرست.",
-        parse_mode="Markdown",
-    )
+    await message.answer(f"📸 حالا یک عکس بفرست برای گربه #{cat_id}.")
 
 
 @router.message(IsAdmin(), SetCatPicState.waiting_photo)
@@ -260,7 +246,6 @@ async def setcatpic_receive(message: Message, state: FSMContext) -> None:
         await message.answer("⚠️ باید عکس بفرستی (Photo). دوباره ارسال کن.")
         return
 
-    # بزرگ‌ترین سایز عکس
     file_id = message.photo[-1].file_id
 
     async with AsyncSessionLocal() as session:
@@ -275,8 +260,4 @@ async def setcatpic_receive(message: Message, state: FSMContext) -> None:
         await session.commit()
 
     await state.clear()
-    await message.answer(
-        f"✅ عکس ست شد برای گربه `{cat_id}`.\n"
-        f"🖼 file_id ذخیره شد.",
-        parse_mode="Markdown",
-    )
+    await message.answer(f"✅ عکس ست شد برای گربه #{cat_id}.")
