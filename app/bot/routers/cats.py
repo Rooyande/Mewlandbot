@@ -55,18 +55,15 @@ async def buycat(message: Message) -> None:
             username=message.from_user.username,
         )
 
-        # تمام cats فعال
         res = await session.execute(select(Cat).where(Cat.is_active == True))  # noqa: E712
         cats = list(res.scalars().all())
         if not cats:
             await message.answer("❌ هیچ گربه‌ای برای خرید موجود نیست.")
             return
 
-        # انتخاب rarity بر اساس نرخ‌ها (فعلاً ثابت - بعداً قابل تنظیم می‌کنیم)
         rates = RarityRates()
         rarity = pick_rarity(rates)
 
-        # اگر از آن rarity چیزی نداریم، fallback کنیم (تا خرید fail نشود)
         chosen = pick_cat_from_pool(cats, rarity)
         if chosen is None:
             for r in ["common", "rare", "epic", "legendary", "mythic"]:
@@ -89,10 +86,8 @@ async def buycat(message: Message) -> None:
             )
             return
 
-        # کم کردن امتیاز
         user.meow_points -= cost
 
-        # ثبت گربه برای کاربر
         uc = UserCat(
             user_telegram_id=user.telegram_id,
             cat_id=chosen.id,
@@ -109,7 +104,6 @@ async def buycat(message: Message) -> None:
 
     emoji = RARITY_EMOJI.get(rarity, "🐱")
 
-    # رندر/آماده‌سازی تصویر
     img_path = render_cat_image(chosen.base_image_path, title=chosen.name)
     photo = FSInputFile(str(img_path))
 
@@ -120,7 +114,8 @@ async def buycat(message: Message) -> None:
         f"💸 هزینه: **{cost}**\n"
         f"🪙 امتیاز باقی‌مانده: **{user.meow_points}**\n\n"
         f"📌 برای دیدن گربه‌هات: /mycats\n"
-        f"🔎 جزئیات این گربه: /cat {uc.id}"
+        f"🔎 جزئیات این گربه: /cat {uc.id}\n"
+        f"🏷 اسم گذاشتن: `/namecat {uc.id} <اسم>`"
     )
 
     await message.answer_photo(photo=photo, caption=caption, parse_mode="Markdown")
@@ -160,7 +155,8 @@ async def mycats(message: Message) -> None:
         lines.append(f"{emoji} `#{uc.id}` **{cat.name}**{nick}  | lvl {uc.level}")
 
     lines.append("────────────")
-    lines.append("برای دیدن جزئیات یک گربه: /cat <id>")
+    lines.append("🔎 جزئیات: `/cat <id>`")
+    lines.append("🏷 اسم‌گذاری: `/namecat <id> <اسم>`")
 
     await message.answer("\n".join(lines), parse_mode="Markdown")
 
@@ -210,6 +206,55 @@ async def cat_detail(message: Message) -> None:
         f"😊 happiness: **{uc.happiness}**\n"
         f"🍗 hunger: **{uc.hunger}**\n"
         f"❤️ alive: **{uc.is_alive}**\n"
-        "────────────",
+        "────────────\n"
+        f"🏷 تغییر اسم: `/namecat {uc.id} <اسم>`",
+        parse_mode="Markdown",
+    )
+
+
+@router.message(Command("namecat"))
+async def namecat(message: Message) -> None:
+    if _is_private_and_not_admin(message):
+        return
+    if not _is_allowed_group(message):
+        return
+
+    parts = (message.text or "").strip().split(maxsplit=2)
+    if len(parts) < 3:
+        await message.answer(
+            "⚠️ فرمت درست:\n"
+            "`/namecat <cat_id> <اسم>`\n"
+            "مثال: `/namecat 12 MrFluffy`",
+            parse_mode="Markdown",
+        )
+        return
+
+    try:
+        uc_id = int(parts[1])
+    except ValueError:
+        await message.answer("⚠️ cat_id باید عدد باشد.")
+        return
+
+    nickname = parts[2].strip()
+    if len(nickname) < 1 or len(nickname) > 24:
+        await message.answer("⚠️ اسم باید بین 1 تا 24 کاراکتر باشد.")
+        return
+
+    async with AsyncSessionLocal() as session:
+        res = await session.execute(
+            select(UserCat).where(UserCat.id == uc_id).where(UserCat.user_telegram_id == message.from_user.id)
+        )
+        uc = res.scalar_one_or_none()
+
+        if not uc:
+            await message.answer("❌ این گربه برای شما نیست یا وجود ندارد.")
+            return
+
+        uc.nickname = nickname
+        await session.commit()
+
+    await message.answer(
+        f"✅ اسم گربه با موفقیت تغییر کرد.\n"
+        f"🐾 `#{uc_id}` → **{nickname}**",
         parse_mode="Markdown",
     )
