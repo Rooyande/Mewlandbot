@@ -2,6 +2,7 @@ import asyncio
 import logging
 
 from aiogram import Bot, Dispatcher
+from aiogram.fsm.storage.memory import MemoryStorage
 
 from app.config.settings import settings
 from app.bot.routers.public import router as public_router
@@ -15,7 +16,10 @@ logging.basicConfig(level=logging.INFO)
 
 async def main() -> None:
     bot = Bot(token=settings.bot_token)
-    dp = Dispatcher()
+
+    # ✅ FSM Storage (برای setcatpic و حالت‌های آینده)
+    storage = MemoryStorage()
+    dp = Dispatcher(storage=storage)
 
     # routers
     dp.include_router(admin_router)
