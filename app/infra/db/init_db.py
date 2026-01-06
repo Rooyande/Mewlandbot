@@ -1,13 +1,12 @@
 import asyncio
 
 from app.infra.db.session import engine
+from app.domain.users.models import Base
 
-# Base مشترک
-from app.domain.users.models import Base  # noqa: F401
-
-# فقط برای اینکه مدل‌ها import شوند و Base.metadata پر شود:
-from app.domain.users.models import User  # noqa: F401
-from app.domain.cats.models import Cat, UserCat  # noqa: F401
+# ✅ مهم: فقط برای اینکه SQLAlchemy جدول‌ها را بشناسد
+# هیچ چیز از این‌ها استفاده نمی‌کنیم ولی import لازم است
+import app.domain.cats.models  # noqa: F401
+import app.domain.items.models  # noqa: F401
 
 
 async def init_db() -> None:
