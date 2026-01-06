@@ -7,12 +7,12 @@ from app.domain.cats.models import Cat, CatRarity
 
 @dataclass(frozen=True)
 class RarityRates:
-    # نرخ‌های جدید (کمیابی واقعی‌تر)
-    common: float = 0.85
-    rare: float = 0.12
-    epic: float = 0.025
-    legendary: float = 0.0045
-    mythic: float = 0.0005  # خیلی خیلی خیلی کم (1 از 2000)
+    # خیلی کمیاب‌تر از قبل
+    common: float = 0.90
+    rare: float = 0.09
+    epic: float = 0.009
+    legendary: float = 0.0009
+    mythic: float = 0.0001  # 1 از 10000
 
     def as_weights(self) -> dict[str, float]:
         return {
