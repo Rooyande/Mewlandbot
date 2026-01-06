@@ -46,6 +46,28 @@ def _format_duration(seconds: int) -> str:
     return " ".join(parts)
 
 
+async def _calc_total_rate_per_sec(session, telegram_id: int) -> float:
+    """
+    نرخ تولید کاربر را از روی گربه‌ها حساب می‌کند.
+    هر گربه: base_meow_amount / base_meow_interval_sec
+    """
+    gen_res = await session.execute(
+        select(Cat.base_meow_amount, Cat.base_meow_interval_sec)
+        .join(UserCat, UserCat.cat_id == Cat.id)
+        .where(UserCat.user_telegram_id == telegram_id)
+        .where(UserCat.is_alive == True)  # noqa: E712
+        .where(UserCat.is_left == False)  # noqa: E712
+    )
+    rows = gen_res.all()
+
+    total_per_sec = 0.0
+    for amount, interval_sec in rows:
+        if interval_sec and interval_sec > 0:
+            total_per_sec += float(amount) / float(interval_sec)
+
+    return total_per_sec
+
+
 @router.message(Command("start"))
 async def start(message: Message) -> None:
     if _is_private_and_not_admin(message):
@@ -59,8 +81,10 @@ async def start(message: Message) -> None:
         "📌 دستورها:\n"
         "• /profile → پروفایل\n"
         "• /claim → دریافت درآمد آفلاین\n"
+        "• /mps → نرخ تولید (meow/sec)\n"
         "• /buycat → خرید گربه\n"
         "• /mycats → گربه‌های من\n"
+        "• /shop → فروشگاه آیتم‌ها\n"
         "• /help → راهنما"
     )
 
@@ -77,8 +101,11 @@ async def help_cmd(message: Message) -> None:
         "────────────\n"
         "👤 /profile → پروفایل و آمار\n"
         "💤 /claim → دریافت درآمد آفلاین\n"
+        "⚙️ /mps → نرخ تولید (meow/sec)\n"
         "🐱 /buycat → خرید گربه با امتیاز\n"
         "📋 /mycats → لیست گربه‌ها\n"
+        "🛒 /shop → فروشگاه آیتم‌ها\n"
+        "📦 /myitems → آیتم‌های من\n"
         "🔎 /cat <id> → جزئیات یک گربه\n"
         "🏷 /namecat <id> <name> → اسم گذاشتن روی گربه\n"
     )
@@ -118,6 +145,36 @@ async def claim(message: Message) -> None:
     )
 
 
+@router.message(Command("mps"))
+async def mps(message: Message) -> None:
+    if _is_private_and_not_admin(message):
+        return
+    if not _is_allowed_group(message):
+        return
+
+    async with AsyncSessionLocal() as session:
+        user = await get_or_create_user(
+            session=session,
+            telegram_id=message.from_user.id,
+            username=message.from_user.username,
+        )
+        rate_per_sec = await _calc_total_rate_per_sec(session, user.telegram_id)
+
+    per_min = rate_per_sec * 60
+    per_hour = rate_per_sec * 3600
+
+    await message.answer(
+        "⚙️ نرخ تولید شما\n"
+        "────────────\n"
+        f"⏱ {rate_per_sec:.4f} meow / ثانیه\n"
+        f"🕐 {per_min:.2f} meow / دقیقه\n"
+        f"🕐 {per_hour:.2f} meow / ساعت\n"
+        "────────────\n"
+        "💤 دریافت آفلاین: /claim\n"
+        "👤 پروفایل: /profile"
+    )
+
+
 @router.message(Command("profile"))
 async def profile(message: Message) -> None:
     if _is_private_and_not_admin(message):
@@ -143,20 +200,8 @@ async def profile(message: Message) -> None:
         )
         cats_count = int(cats_count_res.scalar() or 0)
 
-        # ✅ نرخ تولید (بر اساس گربه‌ها)
-        gen_res = await session.execute(
-            select(Cat.base_meow_amount, Cat.base_meow_interval_sec)
-            .join(UserCat, UserCat.cat_id == Cat.id)
-            .where(UserCat.user_telegram_id == user.telegram_id)
-            .where(UserCat.is_alive == True)  # noqa: E712
-            .where(UserCat.is_left == False)  # noqa: E712
-        )
-        rows = gen_res.all()
-
-    total_per_sec = 0.0
-    for amount, interval_sec in rows:
-        if interval_sec and interval_sec > 0:
-            total_per_sec += float(amount) / float(interval_sec)
+        # ✅ نرخ تولید
+        total_per_sec = await _calc_total_rate_per_sec(session, user.telegram_id)
 
     per_min = total_per_sec * 60
     per_hour = total_per_sec * 3600
@@ -185,5 +230,7 @@ async def profile(message: Message) -> None:
         "────────────\n"
         "🐱 خرید گربه: /buycat\n"
         "📋 گربه‌ها: /mycats\n"
-        "💤 دریافت دستی آفلاین: /claim"
+        "🛒 شاپ: /shop\n"
+        "💤 دریافت دستی آفلاین: /claim\n"
+        "⚙️ نرخ تولید: /mps"
     )
