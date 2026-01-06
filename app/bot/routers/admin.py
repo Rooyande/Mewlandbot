@@ -34,13 +34,14 @@ def _write_allowlist(values: set[int]) -> None:
 async def admin_panel(message: Message) -> None:
     allowlist = _read_allowlist()
     await message.answer(
-        "پنل ادمین\n\n"
-        f"گروه‌های مجاز (تعداد): {len(allowlist)}\n\n"
-        "دستورها:\n"
-        "/allow <chat_id>  -> اضافه کردن گروه\n"
-        "/deny <chat_id>   -> حذف گروه\n"
-        "/list_allowed     -> نمایش لیست\n\n"
-        "نکته: chat_id گروه معمولاً با -100 شروع می‌شود."
+        "🛠 پنل ادمین\n\n"
+        f"✅ گروه‌های مجاز: **{len(allowlist)}**\n\n"
+        "📌 دستورها:\n"
+        "➕ /allow <chat_id>  -> اضافه کردن گروه\n"
+        "➖ /deny <chat_id>   -> حذف گروه\n"
+        "📋 /list_allowed     -> نمایش لیست\n\n"
+        "ℹ️ نکته: chat_id گروه معمولاً با -100 شروع می‌شود.",
+        parse_mode="Markdown",
     )
 
 
@@ -48,9 +49,9 @@ async def admin_panel(message: Message) -> None:
 async def list_allowed(message: Message) -> None:
     allowlist = _read_allowlist()
     if not allowlist:
-        await message.answer("هیچ گروهی در لیست مجاز نیست.")
+        await message.answer("📭 هیچ گروهی در لیست مجاز نیست.")
         return
-    text = "لیست گروه‌های مجاز:\n" + "\n".join(str(x) for x in sorted(allowlist))
+    text = "📋 لیست گروه‌های مجاز:\n" + "\n".join(f"✅ {x}" for x in sorted(allowlist))
     await message.answer(text)
 
 
@@ -58,39 +59,39 @@ async def list_allowed(message: Message) -> None:
 async def allow_chat(message: Message) -> None:
     parts = (message.text or "").strip().split()
     if len(parts) != 2:
-        await message.answer("فرمت درست: /allow <chat_id>")
+        await message.answer("⚠️ فرمت درست: `/allow <chat_id>`", parse_mode="Markdown")
         return
 
     try:
         chat_id = int(parts[1])
     except ValueError:
-        await message.answer("chat_id باید عدد باشد.")
+        await message.answer("⚠️ chat_id باید عدد باشد.")
         return
 
     allowlist = _read_allowlist()
     allowlist.add(chat_id)
     _write_allowlist(allowlist)
-    await message.answer(f"✅ اضافه شد: {chat_id}")
+    await message.answer(f"✅ اضافه شد: `{chat_id}`", parse_mode="Markdown")
 
 
 @router.message(IsAdmin(), Command("deny"))
 async def deny_chat(message: Message) -> None:
     parts = (message.text or "").strip().split()
     if len(parts) != 2:
-        await message.answer("فرمت درست: /deny <chat_id>")
+        await message.answer("⚠️ فرمت درست: `/deny <chat_id>`", parse_mode="Markdown")
         return
 
     try:
         chat_id = int(parts[1])
     except ValueError:
-        await message.answer("chat_id باید عدد باشد.")
+        await message.answer("⚠️ chat_id باید عدد باشد.")
         return
 
     allowlist = _read_allowlist()
     if chat_id in allowlist:
         allowlist.remove(chat_id)
         _write_allowlist(allowlist)
-        await message.answer(f"✅ حذف شد: {chat_id}")
+        await message.answer(f"✅ حذف شد: `{chat_id}`", parse_mode="Markdown")
         return
 
-    await message.answer("این chat_id در لیست نبود.")
+    await message.answer("ℹ️ این chat_id در لیست نبود.")
