@@ -33,13 +33,16 @@ def _is_allowed_group(message: Message) -> bool:
 @router.message(CommandStart())
 async def start(message: Message) -> None:
     if _is_private_and_not_admin(message):
-        await message.answer("این بات فقط داخل گروه‌های مجاز فعال است.")
+        await message.answer("⛔ این بات فقط داخل گروه‌های مجاز فعال است.")
         return
 
     if not _is_allowed_group(message):
         return
 
-    await message.answer("بات روشن است. در گروه‌های مجاز با گفتن meow امتیاز می‌گیری.")
+    await message.answer(
+        "✅ بات روشن است.\n🐾 در گروه‌های مجاز با گفتن **meow** امتیاز می‌گیری.",
+        parse_mode="Markdown",
+    )
 
 
 @router.message(Command("profile"))
@@ -80,17 +83,17 @@ async def profile(message: Message) -> None:
     created = user.created_at.strftime("%Y-%m-%d %H:%M")
 
     text = (
-        "پروفایل شما\n"
+        "👤 پروفایل شما\n"
         "────────────\n"
-        f"شناسه: `{user.telegram_id}`\n"
-        f"یوزرنیم: {username}\n"
-        f"Meow Points: **{user.meow_points}**\n"
-        f"Cooldown: {cd_text}\n"
+        f"🆔 شناسه: `{user.telegram_id}`\n"
+        f"🔗 یوزرنیم: {username}\n"
+        f"🪙 Meow Points: **{user.meow_points}**\n"
+        f"⏳ Cooldown: {cd_text}\n"
         "────────────\n"
-        f"تعداد گربه‌ها: {cats_count}\n"
-        f"بهترین گربه: {best_cat}\n"
+        f"🐱 تعداد گربه‌ها: {cats_count}\n"
+        f"🏆 بهترین گربه: {best_cat}\n"
         "────────────\n"
-        f"ساخته شده: {created} (UTC)\n"
+        f"📅 ساخته شده: {created} (UTC)\n"
     )
 
     await message.answer(text, parse_mode="Markdown")
@@ -125,7 +128,7 @@ async def handle_text(message: Message) -> None:
                 remaining = cooldown - diff
                 mins = int(remaining.total_seconds() // 60)
                 secs = int(remaining.total_seconds() % 60)
-                await message.answer(f"هنوز کول‌داون داری. {mins}:{secs:02d} دیگه صبر کن.")
+                await message.answer(f"⏳ هنوز کول‌داون داری.\n🕒 {mins}:{secs:02d} دیگه صبر کن.")
                 return
 
         user.meow_points += 1
@@ -133,9 +136,8 @@ async def handle_text(message: Message) -> None:
         await session.commit()
 
     await message.answer(
-    f"✅ +1 Meow Point گرفتی!\n"
-    f"امتیاز فعلی: **{user.meow_points}**\n"
-    f"کول‌داون: 7 دقیقه",
-    parse_mode="Markdown",
-)
-
+        f"🐾 **Meow!** ✅ +1 امتیاز گرفتی!\n"
+        f"🪙 امتیاز فعلی: **{user.meow_points}**\n"
+        f"⏳ کول‌داون: 7 دقیقه",
+        parse_mode="Markdown",
+    )
