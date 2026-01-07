@@ -1,300 +1,288 @@
+# app/bot/routers/public.py
 from __future__ import annotations
 
+from dataclasses import dataclass
 from datetime import datetime, timezone
+from typing import Optional
 
-from aiogram import Router
-from aiogram.filters import Command
-from aiogram.types import Message
+from aiogram import Router, F
+from aiogram.filters import Command, CommandStart
+from aiogram.types import Message, CallbackQuery
 
-from app.config.settings import settings
-from app.domain.users.service import get_or_create_user
-from app.domain.cats.service import get_user_cats
-from app.domain.items.service import list_shop_items, buy_item, get_user_items
-from app.domain.economy.rate_service import calculate_user_rate
-from app.domain.economy.offline_income import apply_offline_income
+# DB session maker (adjust path if your project differs)
+from app.infra.db.session import async_session_maker  # <-- اگر مسیرش فرق دارد، همین را اصلاح کن
 
-from app.infra.db.session import AsyncSessionLocal
+# Services (adjust paths if needed)
+from app.domain.users.service import get_or_create_user  # expects (session, tg_id, username)
+from app.domain.cats.service import (
+    meow_click,             # (session, user_id or tg_id) -> updated user snapshot
+    get_profile,            # (session, user_id or tg_id) -> profile dto
+    open_cat_shop,          # (session, user_id or tg_id) -> shop dto (cats)
+    buy_cat,                # (session, user_id or tg_id, cat_id) -> result dto
+)
+from app.domain.items.service import (
+    open_item_shop,         # (session, user_id or tg_id) -> shop dto (items)
+    buy_item,               # (session, user_id or tg_id, item_id) -> result dto
+)
+
+from app.domain.economy.offline_income import apply_offline_income  # (session, user_id or tg_id, now=...) -> income dto
 
 
 router = Router()
 
 
-def _is_private_chat(message: Message) -> bool:
-    return message.chat.type == "private"
+def _safe_username(message: Message) -> str:
+    """
+    Ensure we always pass a username string to get_or_create_user.
+    Priority: @username -> full_name -> first_name -> fallback by id
+    """
+    u = message.from_user
+    if not u:
+        return "unknown"
+    if u.username:
+        return f"@{u.username}"
+    full = (u.full_name or "").strip()
+    if full:
+        return full
+    first = (u.first_name or "").strip()
+    if first:
+        return first
+    return f"user_{u.id}"
 
 
-def _is_allowed_group(message: Message) -> bool:
-    if message.chat.id is None:
-        return False
-    return str(message.chat.id) in settings.allowed_chat_ids
+async def _ensure_user(session, message: Message):
+    tg_id = message.from_user.id
+    username = _safe_username(message)
+    return await get_or_create_user(session, tg_id, username)
+
+
+def _now_utc() -> datetime:
+    return datetime.now(timezone.utc)
 
 
 # -------------------------
-# /start , /help
+# Commands
 # -------------------------
 
-@router.message(Command("start"))
-async def start(message: Message) -> None:
-    text = (
-        "👋 سلام! به Meowland خوش اومدی.\n\n"
-        "📌 تو گروه‌های مجاز با گفتن `meow` می‌تونی امتیاز جمع کنی.\n"
-        "🐾 با امتیاز می‌تونی گربه بخری و آیتم بگیری.\n\n"
-        "✅ برای دیدن همه دستورها: /help"
-    )
-    await message.answer(text)
+@router.message(CommandStart())
+async def cmd_start(message: Message) -> None:
+    async with async_session_maker() as session:
+        user = await _ensure_user(session, message)
+
+        # Apply offline income on entry (so profile/meow feels consistent)
+        try:
+            await apply_offline_income(session, user.tg_id, now=_now_utc())
+        except Exception:
+            # Do not crash user experience if offline calc fails
+            pass
+
+        text = (
+            "🐾 خوش اومدی به Meow Bot!\n\n"
+            "✅ دستورهای اصلی:\n"
+            "• /meow — کلیک و گرفتن امتیاز\n"
+            "• /profile — پروفایل و درآمد\n"
+            "• /shop — خرید گربه‌ها\n"
+            "• /items — خرید آیتم‌ها\n"
+            "• /help — راهنما\n\n"
+            "برای شروع، /meow رو بزن."
+        )
+        await message.answer(text)
 
 
 @router.message(Command("help"))
-async def help_cmd(message: Message) -> None:
-    # فعلاً ساده؛ آخر کار کامل و حرفه‌ای می‌کنیم (طبق خواسته‌ات)
+async def cmd_help(message: Message) -> None:
     text = (
-        "📖 راهنمای دستورات:\n\n"
-        "👤 /profile — پروفایل و امتیازها\n"
-        "🐱 /mycats — لیست گربه‌های تو\n"
-        "🛒 /shop — فروشگاه آیتم‌ها\n"
-        "🧺 /myitems — آیتم‌های تو\n"
-        "💰 /mps — نرخ تولید meow/sec\n"
-        "⏳ /claim — دریافت درآمد آفلاین\n"
-        "🧾 /buycat — لیست خرید گربه‌ها\n"
-        "✅ /buycat <id> — خرید گربه\n"
-        "✅ /buyitem <id> — خرید آیتم\n"
+        "📌 راهنمای Meow Bot\n\n"
+        "🐾 عمومی:\n"
+        "• /start — شروع\n"
+        "• /help — همین راهنما\n\n"
+        "🎮 گیم‌پلی:\n"
+        "• /meow — گرفتن Meow Points\n"
+        "• /profile — نمایش پروفایل، تعداد گربه‌ها، درآمد (mps)\n\n"
+        "🛒 فروشگاه:\n"
+        "• /shop — فروشگاه گربه‌ها\n"
+        "• /items — فروشگاه آیتم‌ها\n\n"
+        "نکته: درآمد آفلاین به‌صورت خودکار هنگام ورود/پروفایل اعمال می‌شود. 🧮"
     )
     await message.answer(text)
 
 
-# -------------------------
-# MEOW Message (Group only)
-# -------------------------
+@router.message(Command("meow"))
+async def cmd_meow(message: Message) -> None:
+    async with async_session_maker() as session:
+        user = await _ensure_user(session, message)
 
-@router.message()
-async def handle_meow(message: Message) -> None:
-    text = (message.text or "").strip().lower()
+        # Apply offline income before click so numbers feel correct
+        try:
+            await apply_offline_income(session, user.tg_id, now=_now_utc())
+        except Exception:
+            pass
 
-    # فقط گروه‌های مجاز
-    if message.chat.type in ("group", "supergroup"):
-        if not _is_allowed_group(message):
-            return
+        result = await meow_click(session, user.tg_id)
 
-        if text != "meow":
-            return
+        # Keep message plain text to avoid Markdown entity crashes
+        text = (
+            "😺 Meow!\n"
+            f"➕ +{getattr(result, 'earned', 1)} امتیاز\n"
+            f"💰 موجودی: {getattr(result, 'balance', '—')}\n"
+        )
+        await message.answer(text)
 
-        async with AsyncSessionLocal() as session:
-            user = await get_or_create_user(session, message.from_user.id)
-
-            now = datetime.now(timezone.utc)
-            if user.last_meow_at is not None:
-                diff = (now - user.last_meow_at).total_seconds()
-                if diff < 7 * 60:
-                    left = int((7 * 60) - diff)
-                    await message.reply(f"⏳ هنوز زوده! {left} ثانیه دیگه دوباره meow کن 😼")
-                    return
-
-            user.meow_points += 1
-            user.last_meow_at = now
-            await session.commit()
-
-        await message.reply("✅ +1 Meow Point 😺")
-        return
-
-    # جلوگیری از کارکرد در پیوی (در آینده میشه مدیریتش کرد)
-    if _is_private_chat(message):
-        return
-
-
-# -------------------------
-# /profile
-# -------------------------
 
 @router.message(Command("profile"))
-async def profile(message: Message) -> None:
-    async with AsyncSessionLocal() as session:
-        user = await get_or_create_user(session, message.from_user.id)
+async def cmd_profile(message: Message) -> None:
+    async with async_session_maker() as session:
+        user = await _ensure_user(session, message)
 
-        cats = await get_user_cats(session, user.telegram_id)
-        items = await get_user_items(session, user.telegram_id)
+        income = None
+        try:
+            income = await apply_offline_income(session, user.tg_id, now=_now_utc())
+        except Exception:
+            pass
 
-        breakdown = await calculate_user_rate(session, user.telegram_id)
+        prof = await get_profile(session, user.tg_id)
+
+        # Expected fields (adapt in your service DTOs):
+        balance = getattr(prof, "balance", "—")
+        cats_count = getattr(prof, "cats_count", "—")
+        mps = getattr(prof, "meow_per_second", getattr(prof, "mps", "—"))
+
+        offline_added = getattr(income, "added", None) if income else None
 
         text = (
-            f"👤 پروفایل شما\n\n"
-            f"🆔 ID: `{user.telegram_id}`\n"
-            f"💰 Meow Points: `{user.meow_points}`\n"
-            f"🐱 تعداد گربه‌ها: `{len(cats)}`\n"
-            f"🎒 تعداد آیتم‌ها: `{sum(i.quantity for i in items) if items else 0}`\n\n"
-            f"⚡ تولید (Meow/sec): `{breakdown.final_per_sec:.6f}`\n"
-            f"   🐾 Base: `{breakdown.base_per_sec:.6f}`\n"
-            f"   ➕ Flat: `{breakdown.flat_bonus_per_sec:.6f}`\n"
-            f"   ✖️ Mult: `{breakdown.multiplier:.3f}`\n"
+            "👤 پروفایل\n\n"
+            f"🆔 {user.tg_id}\n"
+            f"💰 Meow Points: {balance}\n"
+            f"🐱 تعداد گربه‌ها: {cats_count}\n"
+            f"⏱️ Meow/sec: {mps}\n"
         )
-    await message.answer(text, parse_mode="Markdown")
+        if offline_added is not None:
+            text += f"\n📦 درآمد آفلاین اضافه شد: {offline_added}\n"
 
+        await message.answer(text)
 
-# -------------------------
-# /mps
-# -------------------------
-
-@router.message(Command("mps"))
-async def mps(message: Message) -> None:
-    async with AsyncSessionLocal() as session:
-        user = await get_or_create_user(session, message.from_user.id)
-        breakdown = await calculate_user_rate(session, user.telegram_id)
-
-    per_sec = breakdown.final_per_sec
-    per_min = per_sec * 60
-    per_hour = per_min * 60
-
-    text = (
-        "⚡ نرخ تولید شما\n\n"
-        f"🐾 Meow/sec: `{per_sec:.6f}`\n"
-        f"🕐 Meow/min: `{per_min:.4f}`\n"
-        f"🕓 Meow/hour: `{per_hour:.2f}`\n\n"
-        f"📌 Base: `{breakdown.base_per_sec:.6f}`\n"
-        f"➕ Flat: `{breakdown.flat_bonus_per_sec:.6f}`\n"
-        f"✖️ Mult: `{breakdown.multiplier:.3f}`\n"
-    )
-    await message.answer(text, parse_mode="Markdown")
-
-
-# -------------------------
-# /claim
-# -------------------------
-
-@router.message(Command("claim"))
-async def claim(message: Message) -> None:
-    async with AsyncSessionLocal() as session:
-        user = await get_or_create_user(session, message.from_user.id)
-        result = await apply_offline_income(session, user)
-
-    if result.seconds_used <= 0:
-        await message.answer("⏳ هنوز چیزی برای claim نداری 😿")
-        return
-
-    await message.answer(
-        f"✅ Claim شد!\n\n"
-        f"⏱ مدت: `{result.seconds_used}` ثانیه\n"
-        f"⚡ Rate: `{result.rate_per_sec:.6f}` meow/sec\n"
-        f"💰 درآمد: `{result.earned}` Meow Points 😺",
-        parse_mode="Markdown",
-    )
-
-
-# -------------------------
-# Cats
-# -------------------------
-
-@router.message(Command("mycats"))
-async def mycats(message: Message) -> None:
-    async with AsyncSessionLocal() as session:
-        user = await get_or_create_user(session, message.from_user.id)
-        cats = await get_user_cats(session, user.telegram_id)
-
-    if not cats:
-        await message.answer("😿 هیچ گربه‌ای نداری. با /buycat یکی بخر.")
-        return
-
-    lines = ["🐱 گربه‌های شما:\n"]
-    for uc in cats:
-        nickname = uc.nickname or uc.cat.name
-        lines.append(f"• `{uc.id}` — {nickname} ({uc.cat.rarity}) lvl {uc.level} 😺")
-
-    await message.answer("\n".join(lines), parse_mode="Markdown")
-
-
-@router.message(Command("buycat"))
-async def buycat_list(message: Message) -> None:
-    async with AsyncSessionLocal() as session:
-        user = await get_or_create_user(session, message.from_user.id)
-        from app.domain.cats.service import list_available_cats  # local import
-        cats = await list_available_cats(session)
-
-    if not cats:
-        await message.answer("😿 فعلاً گربه‌ای برای فروش نیست.")
-        return
-
-    lines = ["🧾 لیست گربه‌ها برای خرید:\n"]
-    for c in cats:
-        lines.append(f"• `{c.id}` — {c.name} ({c.rarity}) 🪙 `{c.price_meow}`")
-
-    lines.append("\n✅ خرید: `/buycat <id>`")
-    await message.answer("\n".join(lines), parse_mode="Markdown")
-
-
-@router.message(Command("buycat"))
-async def buycat_execute(message: Message) -> None:
-    # اگر فقط /buycat بود، handler بالا اجرا میشه.
-    # این handler زمانی اجرا میشه که آرگومان داشته باشه.
-    parts = (message.text or "").split()
-    if len(parts) == 1:
-        return
-
-    try:
-        cat_id = int(parts[1])
-    except ValueError:
-        await message.answer("❌ فرمت غلطه. مثال: `/buycat 3`", parse_mode="Markdown")
-        return
-
-    async with AsyncSessionLocal() as session:
-        user = await get_or_create_user(session, message.from_user.id)
-        from app.domain.cats.service import buy_cat  # local import
-
-        ok, msg = await buy_cat(session, user.telegram_id, cat_id)
-
-    await message.answer(msg)
-
-
-# -------------------------
-# Shop Items
-# -------------------------
 
 @router.message(Command("shop"))
-async def shop(message: Message) -> None:
-    async with AsyncSessionLocal() as session:
-        items = await list_shop_items(session)
+async def cmd_shop(message: Message) -> None:
+    async with async_session_maker() as session:
+        user = await _ensure_user(session, message)
+        shop = await open_cat_shop(session, user.tg_id)
 
-    if not items:
-        await message.answer("🛒 فروشگاه خالیه 😿")
+        # If your shop returns list of cats, render a simple list.
+        cats = getattr(shop, "cats", [])
+        if not cats:
+            await message.answer("🛒 فروشگاه گربه‌ها خالیه یا سرویسش درست برنگشته.")
+            return
+
+        lines = ["🛒 فروشگاه گربه‌ها", ""]
+        for c in cats:
+            cid = getattr(c, "id", "?")
+            name = getattr(c, "name", "Cat")
+            rarity = getattr(c, "rarity", "")
+            price = getattr(c, "price", "")
+            mps = getattr(c, "mps", getattr(c, "meow_per_second", ""))
+            lines.append(f"🐾 #{cid} | {name} | {rarity} | 💰{price} | ⏱️{mps}")
+
+        lines.append("")
+        lines.append("برای خرید: دستور زیر را بزن")
+        lines.append("مثال: /buycat 3")
+
+        await message.answer("\n".join(lines))
+
+
+@router.message(Command("items"))
+async def cmd_items(message: Message) -> None:
+    async with async_session_maker() as session:
+        user = await _ensure_user(session, message)
+        shop = await open_item_shop(session, user.tg_id)
+
+        items = getattr(shop, "items", [])
+        if not items:
+            await message.answer("🧰 فروشگاه آیتم‌ها خالیه یا سرویسش درست برنگشته.")
+            return
+
+        lines = ["🧰 فروشگاه آیتم‌ها", ""]
+        for it in items:
+            iid = getattr(it, "id", "?")
+            name = getattr(it, "name", "Item")
+            desc = getattr(it, "description", "")
+            price = getattr(it, "price", "")
+            bonus = getattr(it, "bonus", getattr(it, "mps_bonus", ""))
+            lines.append(f"🧩 #{iid} | {name} | 💰{price} | ⭐{bonus}")
+            if desc:
+                lines.append(f"   └ {desc}")
+
+        lines.append("")
+        lines.append("برای خرید: دستور زیر را بزن")
+        lines.append("مثال: /buyitem 5")
+
+        await message.answer("\n".join(lines))
+
+
+@router.message(Command("buycat"))
+async def cmd_buycat(message: Message) -> None:
+    """
+    Usage: /buycat <cat_id>
+    """
+    parts = (message.text or "").split()
+    if len(parts) < 2 or not parts[1].isdigit():
+        await message.answer("❗️فرمت درست: /buycat 3")
         return
 
-    lines = ["🛒 فروشگاه آیتم‌ها:\n"]
-    for it in items:
-        lines.append(f"• `{it.id}` — {it.name} 🪙 `{it.price_meow}` ({it.effect_type}:{it.effect_value})")
+    cat_id = int(parts[1])
 
-    lines.append("\n✅ خرید: `/buyitem <id>`")
-    await message.answer("\n".join(lines), parse_mode="Markdown")
+    async with async_session_maker() as session:
+        user = await _ensure_user(session, message)
+        result = await buy_cat(session, user.tg_id, cat_id)
+
+        ok = getattr(result, "ok", getattr(result, "success", True))
+        msg = getattr(result, "message", None)
+
+        if ok:
+            await message.answer(f"✅ خرید انجام شد. 🐱\n{msg or ''}".strip())
+        else:
+            await message.answer(f"❌ خرید ناموفق بود.\n{msg or 'موجودی کافی نیست یا آیتم پیدا نشد.'}")
 
 
 @router.message(Command("buyitem"))
-async def buyitem_cmd(message: Message) -> None:
+async def cmd_buyitem(message: Message) -> None:
+    """
+    Usage: /buyitem <item_id>
+    """
     parts = (message.text or "").split()
-    if len(parts) < 2:
-        await message.answer("❌ مثال: `/buyitem 2`", parse_mode="Markdown")
+    if len(parts) < 2 or not parts[1].isdigit():
+        await message.answer("❗️فرمت درست: /buyitem 5")
         return
 
-    try:
-        item_id = int(parts[1])
-    except ValueError:
-        await message.answer("❌ آیتم ID باید عدد باشه.", parse_mode="Markdown")
+    item_id = int(parts[1])
+
+    async with async_session_maker() as session:
+        user = await _ensure_user(session, message)
+        result = await buy_item(session, user.tg_id, item_id)
+
+        ok = getattr(result, "ok", getattr(result, "success", True))
+        msg = getattr(result, "message", None)
+
+        if ok:
+            await message.answer(f"✅ خرید انجام شد. 🧩\n{msg or ''}".strip())
+        else:
+            await message.answer(f"❌ خرید ناموفق بود.\n{msg or 'موجودی کافی نیست یا آیتم پیدا نشد.'}")
+
+
+# -------------------------
+# Optional: fallback text handler (if you had "tap to meow" behavior)
+# -------------------------
+
+@router.message(F.text)
+async def handle_text_fallback(message: Message) -> None:
+    """
+    If you want any plain text (e.g. "meow") to trigger /meow,
+    keep it here. Otherwise, remove this handler.
+    """
+    txt = (message.text or "").strip().lower()
+    if txt in {"meow", "mew", "میو", "میو!", "meow!"}:
+        await cmd_meow(message)
         return
 
-    async with AsyncSessionLocal() as session:
-        user = await get_or_create_user(session, message.from_user.id)
-        ok, msg = await buy_item(session, user.telegram_id, item_id)
-
-    await message.answer(msg)
-
-
-@router.message(Command("myitems"))
-async def myitems(message: Message) -> None:
-    async with AsyncSessionLocal() as session:
-        user = await get_or_create_user(session, message.from_user.id)
-        items = await get_user_items(session, user.telegram_id)
-
-    if not items:
-        await message.answer("🎒 هیچ آیتمی نداری 😿")
-        return
-
-    lines = ["🎒 آیتم‌های شما:\n"]
-    for ui in items:
-        lines.append(f"• {ui.item.name} x{ui.quantity} ✅")
-
-    await message.answer("\n".join(lines))
+    # default guidance
+    await message.answer("برای راهنما /help رو بزن. 🐾")
