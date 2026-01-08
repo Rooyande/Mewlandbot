@@ -17,7 +17,7 @@ class Settings(BaseSettings):
     db_name: str
     db_user: str
     db_password: str
-
+    DB_ECHO: bool = False
     def database_url(self) -> str:
         return (
             f"postgresql+asyncpg://{self.db_user}:{self.db_password}"
