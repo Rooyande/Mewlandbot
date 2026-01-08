@@ -1,265 +1,161 @@
-from aiogram import Router
-from aiogram.filters import Command
+from __future__ import annotations
+
+from aiogram import Router, F
 from aiogram.types import Message
-from aiogram.types.input_file import FSInputFile
-from sqlalchemy import select
 
 from app.config.settings import settings
-from app.infra.db.session import AsyncSessionLocal
+from app.infra.db.session import get_session
 from app.domain.users.service import get_or_create_user
-from app.domain.cats.models import Cat, UserCat
-from app.domain.cats.gacha import RarityRates, pick_rarity, pick_cat_from_pool
-from app.domain.cats.renderer import render_cat_image
+from app.domain.cats.service import (
+    list_active_cats,
+    buy_cat_for_user,
+    list_user_cats,
+    set_user_cat_name,
+)
 
 router = Router()
 
 
-def _is_private_and_not_admin(message: Message) -> bool:
-    return (
-        message.chat.type == "private"
-        and message.from_user is not None
-        and message.from_user.id != settings.admin_telegram_id
-    )
+def _is_admin(user_id: int | None) -> bool:
+    return user_id is not None and user_id == settings.ADMIN_TELEGRAM_ID
 
 
-def _is_allowed_group(message: Message) -> bool:
-    if message.chat.type not in ("group", "supergroup"):
+def _is_allowed_chat(chat_id: int) -> bool:
+    return chat_id in settings.ALLOWED_CHAT_IDS
+
+
+async def _deny_if_not_allowed(message: Message) -> bool:
+    """
+    True یعنی دسترسی رد شده و باید handler متوقف شود.
+    """
+    if message.chat.type == "private" and not _is_admin(message.from_user.id if message.from_user else None):
+        await message.answer("بات فقط در گروه‌های مجاز فعال است.")
         return True
 
-    allowed = settings.allowed_chat_id_set()
-    if not allowed:
-        return True
-    return message.chat.id in allowed
+    if message.chat.type in ("group", "supergroup"):
+        if not _is_allowed_chat(message.chat.id):
+            return True
+
+    return False
 
 
-RARITY_EMOJI = {
-    "common": "⚪",
-    "rare": "🔵",
-    "epic": "🟣",
-    "legendary": "🟠",
-    "mythic": "🔴",
-}
-
-
-@router.message(Command("buycat"))
-async def buycat(message: Message) -> None:
-    if _is_private_and_not_admin(message):
-        return
-    if not _is_allowed_group(message):
+@router.message(F.text.startswith("/cats"))
+async def cats_list(message: Message):
+    if await _deny_if_not_allowed(message):
         return
 
-    async with AsyncSessionLocal() as session:
+    async with get_session() as session:
+        cats = await list_active_cats(session)
+
+    if not cats:
+        await message.answer("فعلاً گربه فعالی وجود ندارد.")
+        return
+
+    lines = ["گربه‌های فعال:"]
+    for c in cats:
+        lines.append(
+            f"{c.id}) {c.name} | rarity={c.rarity} | price={c.price_meow} | base={c.base_meow_amount}/{c.base_meow_interval_sec}s"
+        )
+
+    await message.answer("\n".join(lines))
+
+
+@router.message(F.text.startswith("/buycat"))
+async def buycat(message: Message):
+    if await _deny_if_not_allowed(message):
+        return
+
+    parts = (message.text or "").split(maxsplit=1)
+    if len(parts) < 2:
+        await message.answer("فرمت صحیح: /buycat <cat_id>")
+        return
+
+    try:
+        cat_id = int(parts[1].strip())
+    except ValueError:
+        await message.answer("cat_id باید عدد باشد. مثال: /buycat 1")
+        return
+
+    async with get_session() as session:
         user = await get_or_create_user(
-            session=session,
-            telegram_id=message.from_user.id,
-            username=message.from_user.username,
+            session,
+            message.from_user.id,
+            message.from_user.username if message.from_user else None,
         )
 
-        res = await session.execute(select(Cat).where(Cat.is_active == True))  # noqa: E712
-        cats = list(res.scalars().all())
-        if not cats:
-            await message.answer("❌ هیچ گربه‌ای برای خرید موجود نیست.")
-            return
+        ok, msg = await buy_cat_for_user(session, user.telegram_id, cat_id)
 
-        rates = RarityRates()
-        rarity = pick_rarity(rates)
+    await message.answer(msg if msg else ("✅ خرید انجام شد." if ok else "❌ خرید انجام نشد."))
 
-        chosen = pick_cat_from_pool(cats, rarity)
-        if chosen is None:
-            for r in ["common", "rare", "epic", "legendary", "mythic"]:
-                chosen = pick_cat_from_pool(cats, r)
-                if chosen:
-                    rarity = r
-                    break
 
-        if chosen is None:
-            await message.answer("❌ هیچ گربه فعالی پیدا نشد.")
-            return
-
-        cost = chosen.price_meow
-        if user.meow_points < cost:
-            await message.answer(
-                f"💸 امتیاز کافی نداری!\n"
-                f"🪙 نیاز: **{cost}**\n"
-                f"🪙 داری: **{user.meow_points}**",
-                parse_mode="Markdown",
-            )
-            return
-
-        user.meow_points -= cost
-
-        uc = UserCat(
-            user_telegram_id=user.telegram_id,
-            cat_id=chosen.id,
-            nickname=None,
-            level=1,
-            happiness=100,
-            hunger=0,
-            is_alive=True,
-            is_left=False,
-        )
-        session.add(uc)
-        await session.commit()
-        await session.refresh(uc)
-
-    emoji = RARITY_EMOJI.get(rarity, "🐱")
-
-    caption = (
-        f"🎉 مبارک!\n"
-        f"{emoji} یک گربه **{chosen.name}** گرفتی!\n"
-        f"⭐ rarity: **{rarity}**\n"
-        f"💸 هزینه: **{cost}**\n"
-        f"🪙 امتیاز باقی‌مانده: **{user.meow_points}**\n\n"
-        f"📌 برای دیدن گربه‌هات: /mycats\n"
-        f"🔎 جزئیات این گربه: /cat {uc.id}\n"
-        f"🏷 اسم گذاشتن: `/namecat {uc.id} <اسم>`"
-    )
-
-    # اگر image_file_id داشت، مستقیم از تلگرام ارسال می‌کنیم
-    if chosen.image_file_id:
-        await message.answer_photo(photo=chosen.image_file_id, caption=caption, parse_mode="Markdown")
+@router.message(F.text.startswith("/mycats"))
+async def mycats(message: Message):
+    """
+    اینجا دقیقاً جایی بود که parse_mode=Markdown باعث crash می‌شد.
+    ما plain text می‌فرستیم تا هیچ entity parsing رخ ندهد.
+    """
+    if await _deny_if_not_allowed(message):
         return
 
-    # اگر نداشت، fallback به placeholder/asset path
-    img_path = render_cat_image(chosen.base_image_path, title=chosen.name)
-    photo = FSInputFile(str(img_path))
-    await message.answer_photo(photo=photo, caption=caption, parse_mode="Markdown")
-
-
-@router.message(Command("mycats"))
-async def mycats(message: Message) -> None:
-    if _is_private_and_not_admin(message):
-        return
-    if not _is_allowed_group(message):
-        return
-
-    async with AsyncSessionLocal() as session:
-        await get_or_create_user(
-            session=session,
-            telegram_id=message.from_user.id,
-            username=message.from_user.username,
+    async with get_session() as session:
+        user = await get_or_create_user(
+            session,
+            message.from_user.id,
+            message.from_user.username if message.from_user else None,
         )
 
-        res = await session.execute(
-            select(UserCat, Cat)
-            .join(Cat, Cat.id == UserCat.cat_id)
-            .where(UserCat.user_telegram_id == message.from_user.id)
-            .order_by(UserCat.id.desc())
-            .limit(20)
+        cats = await list_user_cats(session, user.telegram_id)
+
+    if not cats:
+        await message.answer("هنوز گربه‌ای نداری. برای دیدن کاتالوگ: /cats")
+        return
+
+    lines = ["گربه‌های شما:"]
+    for uc in cats:
+        # حداقل اطلاعات قابل نمایش و بدون کاراکترهای خاص Markdown
+        nickname = uc.nickname or "-"
+        lines.append(
+            f"#{uc.id} | {uc.cat.name} | rarity={uc.cat.rarity} | level={uc.level} | name={nickname}"
         )
-        rows = res.all()
 
-    if not rows:
-        await message.answer("📭 هنوز هیچ گربه‌ای نداری.\nبرای خرید: /buycat")
+    lines.append("")
+    lines.append("برای نام‌گذاری: /setcatname <user_cat_id> <name>")
+    await message.answer("\n".join(lines))
+
+
+@router.message(F.text.startswith("/setcatname"))
+async def setcatname_cmd(message: Message):
+    if await _deny_if_not_allowed(message):
         return
 
-    lines = ["🐾 گربه‌های شما (آخرین 20 تا):", "────────────"]
-    for uc, cat in rows:
-        emoji = RARITY_EMOJI.get(cat.rarity, "🐱")
-        nick = f" ({uc.nickname})" if uc.nickname else ""
-        lines.append(f"{emoji} `#{uc.id}` **{cat.name}**{nick}  | lvl {uc.level}")
-
-    lines.append("────────────")
-    lines.append("🔎 جزئیات: `/cat <id>`")
-    lines.append("🏷 اسم‌گذاری: `/namecat <id> <اسم>`")
-
-    await message.answer("\n".join(lines), parse_mode="Markdown")
-
-
-@router.message(Command("cat"))
-async def cat_detail(message: Message) -> None:
-    if _is_private_and_not_admin(message):
-        return
-    if not _is_allowed_group(message):
-        return
-
-    parts = (message.text or "").strip().split()
-    if len(parts) != 2:
-        await message.answer("⚠️ فرمت درست: `/cat <id>`", parse_mode="Markdown")
-        return
-
-    try:
-        uc_id = int(parts[1])
-    except ValueError:
-        await message.answer("⚠️ id باید عدد باشد.")
-        return
-
-    async with AsyncSessionLocal() as session:
-        res = await session.execute(
-            select(UserCat, Cat)
-            .join(Cat, Cat.id == UserCat.cat_id)
-            .where(UserCat.id == uc_id)
-            .where(UserCat.user_telegram_id == message.from_user.id)
-        )
-        row = res.first()
-
-    if not row:
-        await message.answer("❌ این گربه برای شما نیست یا وجود ندارد.")
-        return
-
-    uc, cat = row
-    emoji = RARITY_EMOJI.get(cat.rarity, "🐱")
-    nick = uc.nickname or "ندارد"
-
-    await message.answer(
-        "🐱 جزئیات گربه\n"
-        "────────────\n"
-        f"{emoji} نام: **{cat.name}**\n"
-        f"⭐ rarity: **{cat.rarity}**\n"
-        f"🏷 نام دلخواه: **{nick}**\n"
-        f"📈 level: **{uc.level}**\n"
-        f"😊 happiness: **{uc.happiness}**\n"
-        f"🍗 hunger: **{uc.hunger}**\n"
-        f"❤️ alive: **{uc.is_alive}**\n"
-        "────────────\n"
-        f"🏷 تغییر اسم: `/namecat {uc.id} <اسم>`",
-        parse_mode="Markdown",
-    )
-
-
-@router.message(Command("namecat"))
-async def namecat(message: Message) -> None:
-    if _is_private_and_not_admin(message):
-        return
-    if not _is_allowed_group(message):
-        return
-
-    parts = (message.text or "").strip().split(maxsplit=2)
+    parts = (message.text or "").split(maxsplit=2)
     if len(parts) < 3:
-        await message.answer(
-            "⚠️ فرمت درست:\n"
-            "`/namecat <cat_id> <اسم>`\n"
-            "مثال: `/namecat 12 MrFluffy`",
-            parse_mode="Markdown",
-        )
+        await message.answer("فرمت صحیح: /setcatname <user_cat_id> <name>")
         return
 
     try:
-        uc_id = int(parts[1])
+        user_cat_id = int(parts[1].strip())
     except ValueError:
-        await message.answer("⚠️ cat_id باید عدد باشد.")
+        await message.answer("user_cat_id باید عدد باشد. مثال: /setcatname 12 Mimo")
         return
 
-    nickname = parts[2].strip()
-    if len(nickname) < 1 or len(nickname) > 24:
-        await message.answer("⚠️ اسم باید بین 1 تا 24 کاراکتر باشد.")
+    new_name = parts[2].strip()
+    if not new_name:
+        await message.answer("نام نمی‌تواند خالی باشد.")
         return
 
-    async with AsyncSessionLocal() as session:
-        res = await session.execute(
-            select(UserCat).where(UserCat.id == uc_id).where(UserCat.user_telegram_id == message.from_user.id)
+    # محدودیت ساده برای جلوگیری از اسپم/بهم ریختن UI
+    if len(new_name) > 30:
+        await message.answer("نام خیلی طولانی است. حداکثر ۳۰ کاراکتر.")
+        return
+
+    async with get_session() as session:
+        user = await get_or_create_user(
+            session,
+            message.from_user.id,
+            message.from_user.username if message.from_user else None,
         )
-        uc = res.scalar_one_or_none()
 
-        if not uc:
-            await message.answer("❌ این گربه برای شما نیست یا وجود ندارد.")
-            return
+        ok, msg = await set_user_cat_name(session, user.telegram_id, user_cat_id, new_name)
 
-        uc.nickname = nickname
-        await session.commit()
-
-    await message.answer(
-        f"✅ اسم گربه با موفقیت تغییر کرد.\n"
-        f"🐾 `#{uc_id}` → **{nickname}**",
-        parse_mode="Markdown",
-    )
+    await message.answer(msg if msg else ("✅ نام گربه تغییر کرد." if ok else "❌ تغییر نام انجام نشد."))
