@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import os
 from contextlib import asynccontextmanager
-from typing import AsyncIterator, Optional
+from typing import AsyncIterator
 
 from sqlalchemy.ext.asyncio import (
     AsyncEngine,
@@ -14,83 +14,31 @@ from sqlalchemy.ext.asyncio import (
 from app.config.settings import settings
 
 
-def _get_from_settings(*names: str) -> Optional[str]:
+def _resolve_database_url() -> str:
     """
-    Safely fetch a string attribute from settings if it exists and is truthy.
-    Tries names in order.
-    """
-    for name in names:
-        if hasattr(settings, name):
-            value = getattr(settings, name)
-            if value:
-                return str(value)
-    return None
-
-
-def _get_from_env(*names: str) -> Optional[str]:
-    """
-    Fetch a string value from environment variables if present and non-empty.
-    Tries names in order.
-    """
-    for name in names:
-        value = os.getenv(name)
-        if value:
-            return value
-    return None
-
-
-def _build_database_url() -> str:
-    """
-    Build database URL robustly, supporting multiple config styles.
-
     Priority:
-    1) ENV: DATABASE_URL / DB_URL / SQLALCHEMY_DATABASE_URL
-    2) settings: DATABASE_URL / DB_URL / SQLALCHEMY_DATABASE_URL
-    3) ENV pieces: DB_USER, DB_PASSWORD, DB_HOST, DB_PORT, DB_NAME
-    4) settings pieces: DB_USER, DB_PASSWORD, DB_HOST, DB_PORT, DB_NAME
-
-    If nothing found, raises RuntimeError with clear instructions.
+    1) If ENV has DATABASE_URL / DB_URL / SQLALCHEMY_DATABASE_URL => use it
+    2) Else use settings.database_url() (your project standard)
     """
 
-    # 1) ENV URL
-    url = _get_from_env("DATABASE_URL", "DB_URL", "SQLALCHEMY_DATABASE_URL")
-    if url:
-        return url
-
-    # 2) settings URL
-    url = _get_from_settings("DATABASE_URL", "DB_URL", "SQLALCHEMY_DATABASE_URL")
-    if url:
-        return url
-
-    # helper to read parts either from env or settings
-    def read_part(key: str) -> Optional[str]:
-        return _get_from_env(key) or _get_from_settings(key)
-
-    user = read_part("DB_USER")
-    password = read_part("DB_PASSWORD")
-    host = read_part("DB_HOST")
-    port = read_part("DB_PORT")
-    name = read_part("DB_NAME")
-
-    if all([user, password, host, port, name]):
-        return f"postgresql+asyncpg://{user}:{password}@{host}:{port}/{name}"
-
-    raise RuntimeError(
-        "Database configuration is missing.\n"
-        "Set one of these:\n"
-        "  - ENV DATABASE_URL (recommended)\n"
-        "  - ENV DB_URL\n"
-        "  - ENV SQLALCHEMY_DATABASE_URL\n"
-        "OR provide all parts:\n"
-        "  - DB_USER, DB_PASSWORD, DB_HOST, DB_PORT, DB_NAME\n"
+    # 1) ENV-based URL (most robust for deployments)
+    env_url = (
+        os.getenv("DATABASE_URL")
+        or os.getenv("DB_URL")
+        or os.getenv("SQLALCHEMY_DATABASE_URL")
     )
+    if env_url:
+        return env_url
+
+    # 2) Project's Settings method
+    return settings.database_url()
 
 
-DATABASE_URL: str = _build_database_url()
+DATABASE_URL: str = _resolve_database_url()
 
 engine: AsyncEngine = create_async_engine(
     DATABASE_URL,
-    echo=bool(_get_from_env("DB_ECHO") or _get_from_settings("DB_ECHO") or False),
+    echo=False,
     pool_pre_ping=True,
 )
 
