@@ -19,6 +19,7 @@ CREATE TABLE IF NOT EXISTS users (
   passive_cap_hours INTEGER,
   created_at INTEGER NOT NULL
 );
+
 CREATE TABLE IF NOT EXISTS rate_limits (
   user_id INTEGER NOT NULL,
   key TEXT NOT NULL,
@@ -78,6 +79,7 @@ CREATE TABLE IF NOT EXISTS user_items (
   item_id INTEGER NOT NULL,
   qty INTEGER NOT NULL DEFAULT 0,
   durability_state_json TEXT NOT NULL DEFAULT '{}',
+  UNIQUE(user_id, item_id),
   FOREIGN KEY (user_id) REFERENCES users(user_id) ON DELETE CASCADE,
   FOREIGN KEY (item_id) REFERENCES items_catalog(item_id)
 );
@@ -112,6 +114,19 @@ CREATE TABLE IF NOT EXISTS admin_logs (
 
 CREATE INDEX IF NOT EXISTS idx_user_cats_user ON user_cats(user_id);
 CREATE INDEX IF NOT EXISTS idx_economy_logs_user_ts ON economy_logs(user_id, ts);
+
+CREATE TABLE IF NOT EXISTS item_shop_offers (
+  offer_id INTEGER PRIMARY KEY AUTOINCREMENT,
+  item_id INTEGER NOT NULL,
+  price INTEGER NOT NULL,
+  active INTEGER NOT NULL DEFAULT 1,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL,
+  FOREIGN KEY (item_id) REFERENCES items_catalog(item_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_item_shop_offers_active ON item_shop_offers(active);
+CREATE INDEX IF NOT EXISTS idx_item_shop_offers_item ON item_shop_offers(item_id);
 """
 
 async def open_db() -> aiosqlite.Connection:
