@@ -1,3 +1,4 @@
+# bot/main.py
 import asyncio
 import logging
 import time
@@ -46,6 +47,19 @@ from admin_items import (
     admin_additem_handle_message,
     admin_additem_confirm,
     admin_additem_cancel,
+)
+from admin_item_shop import (
+    ishop_admin_menu_kb,
+    ishop_admin_menu_text,
+    add_offer_start,
+    add_offer_cancel,
+    add_offer_handle_message,
+    add_offer_confirm,
+    list_offers,
+    offer_detail,
+    offer_toggle,
+    set_weekly_cap_start,
+    set_weekly_cap_handle_message,
 )
 from shop_ui import (
     direct_shop_root_kb,
@@ -314,7 +328,7 @@ async def shop_prem(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await _edit_or_reply(update, text, _shop_keyboard())
 
 
-# --- Direct Purchase (unchanged) ---
+# --- Direct Purchase ---
 async def dshop_root(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     txt = await direct_shop_root_text()
     await _edit_or_reply(update, txt, direct_shop_root_kb())
@@ -447,7 +461,7 @@ async def dshop_cb(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await dshop_root(update, context)
 
 
-# --- Item Shop ---
+# --- Item Shop (User) ---
 async def ishop_root(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     txt = await item_shop_root_text()
     await _edit_or_reply(update, txt, item_shop_root_kb())
@@ -468,7 +482,7 @@ async def ishop_list(update: Update, context: ContextTypes.DEFAULT_TYPE, page: i
 
 async def ishop_buy_prompt(update: Update, context: ContextTypes.DEFAULT_TYPE, item_id: int, back_page: int) -> None:
     txt = await item_buy_confirm_text(item_id)
-    kb = await item_buy_confirm_kb(item_id, back_page)
+    kb = item_buy_confirm_kb(item_id, back_page)
     await _edit_or_reply(update, txt, kb)
 
 
@@ -944,6 +958,64 @@ async def admin_cb(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         await _edit_or_reply(update, txt, kb or admin_menu_keyboard())
         return
 
+    if data == "admin:ishop":
+        await _edit_or_reply(update, await ishop_admin_menu_text(), ishop_admin_menu_kb())
+        return
+
+    if data == "admin:ishop:addoffer":
+        txt, kb = await add_offer_start(context)
+        await _edit_or_reply(update, txt, kb)
+        return
+
+    if data == "admin:ishop:addoffer:confirm":
+        txt, kb = await add_offer_confirm(user_id, context)
+        await _edit_or_reply(update, txt, kb or ishop_admin_menu_kb())
+        return
+
+    if data == "admin:ishop:addoffer:cancel":
+        txt, kb = await add_offer_cancel(context)
+        await _edit_or_reply(update, txt, kb or ishop_admin_menu_kb())
+        return
+
+    if data.startswith("admin:ishop:list:"):
+        parts = data.split(":")
+        page = 0
+        if len(parts) == 4:
+            try:
+                page = int(parts[3])
+            except Exception:
+                page = 0
+        txt, kb = await list_offers(page)
+        await _edit_or_reply(update, txt, kb)
+        return
+
+    if data.startswith("admin:ishop:offer:"):
+        parts = data.split(":")
+        if len(parts) == 4:
+            try:
+                offer_id = int(parts[3])
+            except Exception:
+                return
+            txt, kb = await offer_detail(offer_id)
+            await _edit_or_reply(update, txt, kb)
+            return
+
+    if data.startswith("admin:ishop:toggle:"):
+        parts = data.split(":")
+        if len(parts) == 4:
+            try:
+                offer_id = int(parts[3])
+            except Exception:
+                return
+            txt, kb = await offer_toggle(user_id, offer_id)
+            await _edit_or_reply(update, txt, kb)
+            return
+
+    if data == "admin:ishop:setcap":
+        txt, kb = await set_weekly_cap_start(context)
+        await _edit_or_reply(update, txt, kb)
+        return
+
     await _edit_or_reply(update, await admin_menu_text(), admin_menu_keyboard())
 
 
@@ -965,6 +1037,18 @@ async def admin_msg_router(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     out2 = await admin_additem_handle_message(user_id, update, context)
     if out2 and update.message:
         txt, kb = out2
+        await update.message.reply_text(txt, reply_markup=kb)
+        return
+
+    out3 = await add_offer_handle_message(update, context)
+    if out3 and update.message:
+        txt, kb = out3
+        await update.message.reply_text(txt, reply_markup=kb)
+        return
+
+    out4 = await set_weekly_cap_handle_message(user_id, update, context)
+    if out4 and update.message:
+        txt, kb = out4
         await update.message.reply_text(txt, reply_markup=kb)
         return
 
