@@ -5,6 +5,7 @@ from db import open_db
 def home_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         [
+            [InlineKeyboardButton("Meow", callback_data="act:meow")],
             [InlineKeyboardButton("My Cats", callback_data="nav:cats")],
             [
                 InlineKeyboardButton("Inventory", callback_data="nav:inv"),
