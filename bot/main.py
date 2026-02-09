@@ -41,6 +41,12 @@ from admin import (
     admin_addcat_confirm,
     admin_addcat_cancel,
 )
+from admin_items import (
+    admin_additem_start,
+    admin_additem_handle_message,
+    admin_additem_confirm,
+    admin_additem_cancel,
+)
 from shop_ui import (
     direct_shop_root_kb,
     direct_shop_root_text,
@@ -308,6 +314,7 @@ async def shop_prem(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await _edit_or_reply(update, text, _shop_keyboard())
 
 
+# --- Direct Purchase (unchanged) ---
 async def dshop_root(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     txt = await direct_shop_root_text()
     await _edit_or_reply(update, txt, direct_shop_root_kb())
@@ -440,6 +447,7 @@ async def dshop_cb(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await dshop_root(update, context)
 
 
+# --- Item Shop ---
 async def ishop_root(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     txt = await item_shop_root_text()
     await _edit_or_reply(update, txt, item_shop_root_kb())
@@ -529,6 +537,7 @@ async def ishop_cb(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await ishop_root(update, context)
 
 
+# --- Equip ---
 async def eq_menu(update: Update, context: ContextTypes.DEFAULT_TYPE, user_cat_id: int) -> None:
     user_id = _user_id_from_update(update)
     if user_id is None:
@@ -624,65 +633,134 @@ async def eq_cb(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         return
 
 
-async def inv_list(update: Update, context: ContextTypes.DEFAULT_TYPE, page: int = 0) -> None:
+# --- Admin (Cats + Items) ---
+async def admin_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not await _check_join_gate(update, context):
+        return
     user_id = _user_id_from_update(update)
-    if user_id is None:
+    if user_id != OWNER_ID:
         return
-    await _ensure_user(user_id)
-    await _touch_economy(user_id)
-
-    items, has_prev, has_next = await fetch_inventory_page(user_id, page)
-    txt = await inventory_text(user_id, page)
-    kb = inventory_kb(items, page, has_prev, has_next)
-    await _edit_or_reply(update, txt, kb)
+    await _edit_or_reply(update, await admin_menu_text(), admin_menu_keyboard())
 
 
-async def inv_item(update: Update, context: ContextTypes.DEFAULT_TYPE, item_id: int) -> None:
-    user_id = _user_id_from_update(update)
-    if user_id is None:
-        return
-    await _ensure_user(user_id)
-    await _touch_economy(user_id)
-
-    it = await get_item_basic(item_id)
-    if it is None:
-        await _edit_or_reply(update, "Not found.", back_home_keyboard())
-        return
-
-    qty = await user_item_qty(user_id, item_id)
-    txt = await inventory_item_text(user_id, it["name"], it["type"], qty)
-    await _edit_or_reply(update, txt, inventory_item_kb())
-
-
-async def inv_cb(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+async def admin_cb(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if update.callback_query:
         await update.callback_query.answer()
 
     if not await _check_join_gate(update, context):
         return
 
+    user_id = _user_id_from_update(update)
+    if user_id != OWNER_ID:
+        return
+
     data = update.callback_query.data if update.callback_query else ""
-    parts = data.split(":")
 
-    if data.startswith("inv:list:") and len(parts) == 3:
-        try:
-            page = int(parts[2])
-        except Exception:
-            page = 0
-        await inv_list(update, context, page)
+    if data == "admin:addcat":
+        txt = await admin_addcat_start(user_id, context)
+        await _edit_or_reply(update, txt)
         return
 
-    if data.startswith("inv:item:") and len(parts) == 3:
-        try:
-            item_id = int(parts[2])
-        except Exception:
-            return
-        await inv_item(update, context, item_id)
+    if data == "admin:addcat:confirm":
+        txt = await admin_addcat_confirm(user_id, context)
+        await _edit_or_reply(update, txt, admin_menu_keyboard())
         return
 
-    await inv_list(update, context, 0)
+    if data == "admin:addcat:cancel":
+        txt = await admin_addcat_cancel(context)
+        await _edit_or_reply(update, txt, admin_menu_keyboard())
+        return
+
+    if data == "admin:additem":
+        txt = await admin_additem_start(user_id, context)
+        await _edit_or_reply(update, txt)
+        return
+
+    if data == "admin:additem:confirm":
+        txt = await admin_additem_confirm(user_id, context)
+        await _edit_or_reply(update, txt, admin_menu_keyboard())
+        return
+
+    if data == "admin:additem:cancel":
+        txt = await admin_additem_cancel(context)
+        await _edit_or_reply(update, txt, admin_menu_keyboard())
+        return
+
+    await _edit_or_reply(update, await admin_menu_text(), admin_menu_keyboard())
 
 
+async def admin_msg_router(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    user_id = _user_id_from_update(update)
+    if user_id is None:
+        return
+
+    if update.effective_chat and update.effective_chat.type != "private":
+        return
+    if user_id != OWNER_ID:
+        return
+
+    out = await admin_addcat_handle_message(user_id, update, context)
+    if out and update.message:
+        await update.message.reply_text(out)
+        return
+
+    out = await admin_additem_handle_message(user_id, update, context)
+    if out and update.message:
+        await update.message.reply_text(out)
+        return
+
+
+# --- Nav ---
+async def nav_cb(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if update.callback_query:
+        await update.callback_query.answer()
+
+    if not await _check_join_gate(update, context):
+        return
+
+    user_id = _user_id_from_update(update)
+    if user_id is None:
+        return
+
+    await _ensure_user(user_id)
+    await _touch_economy(user_id)
+
+    q = update.callback_query
+    data = "" if q is None else (q.data or "")
+
+    if data == "nav:home":
+        await show_home(update, context)
+        return
+
+    if data == "nav:shop":
+        await shop_view(update, context)
+        return
+
+    if data == "nav:cats":
+        await my_cats_list(update, context, 0)
+        return
+
+    if data == "nav:inv":
+        await inv_list(update, context, 0)
+        return
+
+    if data == "nav:feedall":
+        await feed_all_cb(update, context)
+        return
+
+    if data == "nav:playall":
+        await play_all_cb(update, context)
+        return
+
+    if data == "nav:admin":
+        if user_id == OWNER_ID:
+            await _edit_or_reply(update, await admin_menu_text(), admin_menu_keyboard())
+        return
+
+    await _edit_or_reply(update, "در حال توسعه.", back_home_keyboard())
+
+
+# --- Meow / Cats / Inventory / FeedPlay handlers (unchanged from شما) ---
 async def meow_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not await _check_join_gate(update, context):
         return
@@ -850,6 +928,65 @@ async def cats_cb(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await my_cats_list(update, context, 0)
 
 
+async def inv_list(update: Update, context: ContextTypes.DEFAULT_TYPE, page: int = 0) -> None:
+    user_id = _user_id_from_update(update)
+    if user_id is None:
+        return
+    await _ensure_user(user_id)
+    await _touch_economy(user_id)
+
+    items, has_prev, has_next = await fetch_inventory_page(user_id, page)
+    txt = await inventory_text(user_id, page)
+    kb = inventory_kb(items, page, has_prev, has_next)
+    await _edit_or_reply(update, txt, kb)
+
+
+async def inv_item(update: Update, context: ContextTypes.DEFAULT_TYPE, item_id: int) -> None:
+    user_id = _user_id_from_update(update)
+    if user_id is None:
+        return
+    await _ensure_user(user_id)
+    await _touch_economy(user_id)
+
+    it = await get_item_basic(item_id)
+    if it is None:
+        await _edit_or_reply(update, "Not found.", back_home_keyboard())
+        return
+
+    qty = await user_item_qty(user_id, item_id)
+    txt = await inventory_item_text(user_id, it["name"], it["type"], qty)
+    await _edit_or_reply(update, txt, inventory_item_kb())
+
+
+async def inv_cb(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if update.callback_query:
+        await update.callback_query.answer()
+
+    if not await _check_join_gate(update, context):
+        return
+
+    data = update.callback_query.data if update.callback_query else ""
+    parts = data.split(":")
+
+    if data.startswith("inv:list:") and len(parts) == 3:
+        try:
+            page = int(parts[2])
+        except Exception:
+            page = 0
+        await inv_list(update, context, page)
+        return
+
+    if data.startswith("inv:item:") and len(parts) == 3:
+        try:
+            item_id = int(parts[2])
+        except Exception:
+            return
+        await inv_item(update, context, item_id)
+        return
+
+    await inv_list(update, context, 0)
+
+
 async def feed_all_cb(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if update.callback_query:
         await update.callback_query.answer()
@@ -876,110 +1013,6 @@ async def play_all_cb(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     await _touch_economy(user_id)
     await play_all(user_id)
     await show_home(update, context)
-
-
-async def admin_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    if not await _check_join_gate(update, context):
-        return
-    user_id = _user_id_from_update(update)
-    if user_id != OWNER_ID:
-        return
-    await _edit_or_reply(update, await admin_menu_text(), admin_menu_keyboard())
-
-
-async def admin_cb(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    if update.callback_query:
-        await update.callback_query.answer()
-
-    if not await _check_join_gate(update, context):
-        return
-
-    user_id = _user_id_from_update(update)
-    if user_id != OWNER_ID:
-        return
-
-    data = update.callback_query.data if update.callback_query else ""
-
-    if data == "admin:addcat":
-        txt = await admin_addcat_start(user_id, context)
-        await _edit_or_reply(update, txt)
-        return
-
-    if data == "admin:addcat:confirm":
-        txt = await admin_addcat_confirm(user_id, context)
-        await _edit_or_reply(update, txt, admin_menu_keyboard())
-        return
-
-    if data == "admin:addcat:cancel":
-        txt = await admin_addcat_cancel(context)
-        await _edit_or_reply(update, txt, admin_menu_keyboard())
-        return
-
-    await _edit_or_reply(update, await admin_menu_text(), admin_menu_keyboard())
-
-
-async def admin_msg_router(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    user_id = _user_id_from_update(update)
-    if user_id is None:
-        return
-
-    if update.effective_chat and update.effective_chat.type != "private":
-        return
-    if user_id != OWNER_ID:
-        return
-
-    out = await admin_addcat_handle_message(user_id, update, context)
-    if out and update.message:
-        await update.message.reply_text(out)
-
-
-async def nav_cb(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    if update.callback_query:
-        await update.callback_query.answer()
-
-    if not await _check_join_gate(update, context):
-        return
-
-    user_id = _user_id_from_update(update)
-    if user_id is None:
-        return
-
-    await _ensure_user(user_id)
-    await _touch_economy(user_id)
-
-    q = update.callback_query
-    data = "" if q is None else (q.data or "")
-
-    if data == "nav:home":
-        await show_home(update, context)
-        return
-
-    if data == "nav:shop":
-        await shop_view(update, context)
-        return
-
-    if data == "nav:cats":
-        await my_cats_list(update, context, 0)
-        return
-
-    if data == "nav:inv":
-        await inv_list(update, context, 0)
-        return
-
-    if data == "nav:feedall":
-        await feed_all_cb(update, context)
-        return
-
-    if data == "nav:playall":
-        await play_all_cb(update, context)
-        return
-
-    if data == "nav:admin":
-        if user_id == OWNER_ID:
-            await _edit_or_reply(update, await admin_menu_text(), admin_menu_keyboard())
-        return
-
-    await _edit_or_reply(update, "در حال توسعه.", back_home_keyboard())
 
 
 async def shop_cb(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
