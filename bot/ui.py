@@ -3,6 +3,7 @@ from typing import Dict, Tuple, Optional
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 from db import open_db
+from config import OWNER_ID
 
 DEFAULT_PASSIVE_CAP_HOURS = 24
 
@@ -27,28 +28,29 @@ FEED_DEADLINE_DAYS = {
 }
 
 
-def home_keyboard() -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(
+def home_keyboard(user_id: int | None = None) -> InlineKeyboardMarkup:
+    rows = [
+        [InlineKeyboardButton("Meow", callback_data="act:meow")],
         [
-            [InlineKeyboardButton("Meow", callback_data="act:meow")],
-            [
-                InlineKeyboardButton("Feed All", callback_data="nav:feedall"),
-                InlineKeyboardButton("Play All", callback_data="nav:playall"),
-            ],
-            [InlineKeyboardButton("My Cats", callback_data="nav:cats")],
-            [
-                InlineKeyboardButton("Inventory", callback_data="nav:inv"),
-                InlineKeyboardButton("Shop", callback_data="nav:shop"),
-            ],
-            [
-                InlineKeyboardButton("Events", callback_data="nav:events"),
-                InlineKeyboardButton("Settings", callback_data="nav:settings"),
-            ],
-        ]
-    )
+            InlineKeyboardButton("Feed All", callback_data="nav:feedall"),
+            InlineKeyboardButton("Play All", callback_data="nav:playall"),
+        ],
+        [InlineKeyboardButton("My Cats", callback_data="nav:cats")],
+        [
+            InlineKeyboardButton("Inventory", callback_data="nav:inv"),
+            InlineKeyboardButton("Shop", callback_data="nav:shop"),
+        ],
+        [
+            InlineKeyboardButton("Events", callback_data="nav:events"),
+            InlineKeyboardButton("Settings", callback_data="nav:settings"),
+        ],
+    ]
+    if user_id is not None and user_id == OWNER_ID:
+        rows.append([InlineKeyboardButton("Admin", callback_data="nav:admin")])
+    return InlineKeyboardMarkup(rows)
 
 
-def back_home_keyboard() -> InlineKeyboardMarkup:
+def back_home_keyboard(user_id: int | None = None) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup([[InlineKeyboardButton("Back", callback_data="nav:home")]])
 
 
