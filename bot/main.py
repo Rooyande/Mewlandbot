@@ -28,6 +28,7 @@ from cats_ui import (
     render_cat_details,
     cat_details_keyboard,
 )
+from feedplay import apply_survival, feed_all, play_all
 
 logging.basicConfig(
     level=logging.INFO,
@@ -101,8 +102,9 @@ async def _ensure_user(user_id: int) -> None:
         await db.close()
 
 
-async def _touch_passive(user_id: int) -> None:
+async def _touch_economy(user_id: int) -> None:
     await apply_passive(user_id)
+    await apply_survival(user_id)
 
 
 async def _edit_or_reply(update: Update, text: str, reply_markup: InlineKeyboardMarkup) -> None:
@@ -122,7 +124,7 @@ async def show_home(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         return
 
     await _ensure_user(user_id)
-    await _touch_passive(user_id)
+    await _touch_economy(user_id)
 
     text = await render_home_text(user_id)
     await _edit_or_reply(update, text, home_keyboard())
@@ -161,7 +163,7 @@ async def shop_std(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if user_id is None:
         return
     await _ensure_user(user_id)
-    await _touch_passive(user_id)
+    await _touch_economy(user_id)
 
     res = await open_standard_box(user_id)
     if not res.ok:
@@ -192,7 +194,7 @@ async def shop_prem(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if user_id is None:
         return
     await _ensure_user(user_id)
-    await _touch_passive(user_id)
+    await _touch_economy(user_id)
 
     res = await open_premium_box(user_id)
     if not res.ok:
@@ -227,7 +229,7 @@ async def meow_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         return
 
     await _ensure_user(user_id)
-    await _touch_passive(user_id)
+    await _touch_economy(user_id)
 
     res = await meow_try(user_id)
     if not res.ok:
@@ -253,7 +255,7 @@ async def meow_cb(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         return
 
     await _ensure_user(user_id)
-    await _touch_passive(user_id)
+    await _touch_economy(user_id)
 
     res = await meow_try(user_id)
     if not res.ok:
@@ -273,7 +275,7 @@ async def my_cats_list(update: Update, context: ContextTypes.DEFAULT_TYPE, page:
     if user_id is None:
         return
     await _ensure_user(user_id)
-    await _touch_passive(user_id)
+    await _touch_economy(user_id)
 
     rows, has_prev, has_next = await fetch_user_cats_page(user_id, page)
     text = await render_user_cats_page_text(user_id, page)
@@ -286,7 +288,7 @@ async def my_cat_open(update: Update, context: ContextTypes.DEFAULT_TYPE, user_c
     if user_id is None:
         return
     await _ensure_user(user_id)
-    await _touch_passive(user_id)
+    await _touch_economy(user_id)
 
     text = await render_cat_details(user_id, user_cat_id)
     kb = cat_details_keyboard(user_cat_id)
@@ -298,13 +300,13 @@ async def my_cat_feed(update: Update, context: ContextTypes.DEFAULT_TYPE, user_c
     if user_id is None:
         return
     await _ensure_user(user_id)
-    await _touch_passive(user_id)
+    await _touch_economy(user_id)
 
     now = int(time.time())
     db = await open_db()
     try:
         await db.execute(
-            "UPDATE user_cats SET last_feed_at=? WHERE user_id=? AND id=?",
+            "UPDATE user_cats SET last_feed_at=? WHERE user_id=? AND id=? AND status='active'",
             (now, user_id, user_cat_id),
         )
         await db.commit()
@@ -319,13 +321,13 @@ async def my_cat_play(update: Update, context: ContextTypes.DEFAULT_TYPE, user_c
     if user_id is None:
         return
     await _ensure_user(user_id)
-    await _touch_passive(user_id)
+    await _touch_economy(user_id)
 
     now = int(time.time())
     db = await open_db()
     try:
         await db.execute(
-            "UPDATE user_cats SET last_play_at=? WHERE user_id=? AND id=?",
+            "UPDATE user_cats SET last_play_at=? WHERE user_id=? AND id=? AND status='active'",
             (now, user_id, user_cat_id),
         )
         await db.commit()
@@ -333,6 +335,34 @@ async def my_cat_play(update: Update, context: ContextTypes.DEFAULT_TYPE, user_c
         await db.close()
 
     await my_cat_open(update, context, user_cat_id)
+
+
+async def feed_all_cb(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if update.callback_query:
+        await update.callback_query.answer()
+    if not await _check_join_gate(update, context):
+        return
+    user_id = _user_id_from_update(update)
+    if user_id is None:
+        return
+    await _ensure_user(user_id)
+    await _touch_economy(user_id)
+    await feed_all(user_id)
+    await show_home(update, context)
+
+
+async def play_all_cb(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if update.callback_query:
+        await update.callback_query.answer()
+    if not await _check_join_gate(update, context):
+        return
+    user_id = _user_id_from_update(update)
+    if user_id is None:
+        return
+    await _ensure_user(user_id)
+    await _touch_economy(user_id)
+    await play_all(user_id)
+    await show_home(update, context)
 
 
 async def cats_cb(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -345,7 +375,6 @@ async def cats_cb(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     data = update.callback_query.data if update.callback_query else ""
     parts = data.split(":")
 
-    # cat:list:<page>
     if data.startswith("cat:list:") and len(parts) == 3:
         try:
             page = int(parts[2])
@@ -354,7 +383,6 @@ async def cats_cb(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         await my_cats_list(update, context, page)
         return
 
-    # cat:open:<id>
     if data.startswith("cat:open:") and len(parts) == 3:
         try:
             uc_id = int(parts[2])
@@ -363,7 +391,6 @@ async def cats_cb(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         await my_cat_open(update, context, uc_id)
         return
 
-    # cat:feed:<id>
     if data.startswith("cat:feed:") and len(parts) == 3:
         try:
             uc_id = int(parts[2])
@@ -372,7 +399,6 @@ async def cats_cb(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         await my_cat_feed(update, context, uc_id)
         return
 
-    # cat:play:<id>
     if data.startswith("cat:play:") and len(parts) == 3:
         try:
             uc_id = int(parts[2])
@@ -396,7 +422,7 @@ async def nav_cb(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         return
 
     await _ensure_user(user_id)
-    await _touch_passive(user_id)
+    await _touch_economy(user_id)
 
     q = update.callback_query
     data = "" if q is None else (q.data or "")
@@ -411,6 +437,14 @@ async def nav_cb(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
     if data == "nav:cats":
         await my_cats_list(update, context, 0)
+        return
+
+    if data == "nav:feedall":
+        await feed_all_cb(update, context)
+        return
+
+    if data == "nav:playall":
+        await play_all_cb(update, context)
         return
 
     await _edit_or_reply(update, "در حال توسعه.", back_home_keyboard())
