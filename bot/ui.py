@@ -31,6 +31,10 @@ def home_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         [
             [InlineKeyboardButton("Meow", callback_data="act:meow")],
+            [
+                InlineKeyboardButton("Feed All", callback_data="nav:feedall"),
+                InlineKeyboardButton("Play All", callback_data="nav:playall"),
+            ],
             [InlineKeyboardButton("My Cats", callback_data="nav:cats")],
             [
                 InlineKeyboardButton("Inventory", callback_data="nav:inv"),
