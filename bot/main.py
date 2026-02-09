@@ -41,6 +41,25 @@ from admin import (
     admin_addcat_confirm,
     admin_addcat_cancel,
 )
+from shop_ui import (
+    direct_shop_root_kb,
+    direct_shop_root_text,
+    fetch_direct_shop_page,
+    direct_shop_list_text,
+    direct_shop_list_kb,
+    direct_buy_confirm_text,
+    direct_buy_confirm_kb,
+    RARITIES as DSHOP_RARITIES,
+)
+from shop import direct_buy
+from inventory_ui import (
+    fetch_inventory_page,
+    inventory_text,
+    inventory_kb,
+    inventory_item_text,
+    inventory_item_kb,
+)
+from items import get_item_basic, user_item_qty
 
 logging.basicConfig(
     level=logging.INFO,
@@ -172,6 +191,7 @@ def _shop_keyboard() -> InlineKeyboardMarkup:
         [
             [InlineKeyboardButton("Standard Box", callback_data="shop:std")],
             [InlineKeyboardButton("Premium Box", callback_data="shop:prem")],
+            [InlineKeyboardButton("Direct Purchase", callback_data="dshop:root")],
             [InlineKeyboardButton("Back", callback_data="nav:home")],
         ]
     )
@@ -204,7 +224,6 @@ async def shop_std(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             if media:
                 await _send_media(context, update.effective_chat.id, media)
         else:
-            # fallback: send catalog media
             if res.cat and res.cat.media_type and res.cat.media_file_id:
                 await _send_media(
                     context,
@@ -269,6 +288,203 @@ async def shop_prem(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
     await _edit_or_reply(update, text, _shop_keyboard())
 
+
+# --- Direct Shop Flow ---
+
+async def dshop_root(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    txt = await direct_shop_root_text()
+    await _edit_or_reply(update, txt, direct_shop_root_kb())
+
+
+async def dshop_rarity(update: Update, context: ContextTypes.DEFAULT_TYPE, rarity: str) -> None:
+    await dshop_list(update, context, rarity, 0)
+
+
+async def dshop_list(update: Update, context: ContextTypes.DEFAULT_TYPE, rarity: str, page: int) -> None:
+    user_id = _user_id_from_update(update)
+    if user_id is None:
+        return
+    await _ensure_user(user_id)
+    await _touch_economy(user_id)
+
+    cats, has_prev, has_next = await fetch_direct_shop_page(rarity, page)
+    txt = await direct_shop_list_text(rarity, page)
+    kb = direct_shop_list_kb(rarity, cats, page, has_prev, has_next)
+    await _edit_or_reply(update, txt, kb)
+
+
+async def dshop_buy_prompt(update: Update, context: ContextTypes.DEFAULT_TYPE, cat_id: int) -> None:
+    db = await open_db()
+    try:
+        cur = await db.execute("SELECT name, rarity FROM cats_catalog WHERE cat_id=?", (cat_id,))
+        r = await cur.fetchone()
+    finally:
+        await db.close()
+
+    if r is None:
+        await _edit_or_reply(update, "Not found.", direct_shop_root_kb())
+        return
+
+    name = str(r["name"])
+    rarity = str(r["rarity"])
+    if rarity not in DSHOP_RARITIES:
+        await _edit_or_reply(update, "Not allowed.", direct_shop_root_kb())
+        return
+
+    txt = await direct_buy_confirm_text(name, rarity)
+    kb = direct_buy_confirm_kb(cat_id, rarity)
+    await _edit_or_reply(update, txt, kb)
+
+
+async def dshop_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE, cat_id: int) -> None:
+    user_id = _user_id_from_update(update)
+    if user_id is None:
+        return
+    await _ensure_user(user_id)
+    await _touch_economy(user_id)
+
+    res = await direct_buy(user_id, cat_id)
+    if not res.ok:
+        msg = "Error."
+        if res.reason == "no_mp":
+            msg = "MP کافی نیست."
+        elif res.reason == "weekly_cap":
+            msg = "سقف هفتگی خرید مستقیم پر شده."
+        elif res.reason in ("not_allowed", "not_in_pool", "not_in_window"):
+            msg = "این گزینه قابل خرید نیست."
+        elif res.reason == "not_found":
+            msg = "یافت نشد."
+        await _edit_or_reply(update, msg, direct_shop_root_kb())
+        return
+
+    if update.effective_chat and res.media_type and res.media_file_id:
+        await _send_media(
+            context,
+            update.effective_chat.id,
+            {"media_type": res.media_type, "media_file_id": res.media_file_id},
+        )
+
+    out = res.outcome or {}
+    txt = f"Purchased\n\n{res.name} ({res.rarity})\nCost: {res.price} MP"
+    if out.get("type") == "new":
+        txt += "\nNew cat!"
+    elif out.get("type") in ("dup", "dup_max"):
+        if out.get("level_up"):
+            txt += f"\nDuplicate → Level Up! (Lvl {out.get('level')})"
+        else:
+            txt += f"\nDuplicate. (Lvl {out.get('level')})"
+
+    await _edit_or_reply(update, txt, direct_shop_root_kb())
+
+
+async def dshop_cb(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if update.callback_query:
+        await update.callback_query.answer()
+
+    if not await _check_join_gate(update, context):
+        return
+
+    data = update.callback_query.data if update.callback_query else ""
+    parts = data.split(":")
+
+    if data == "dshop:root":
+        await dshop_root(update, context)
+        return
+
+    if data.startswith("dshop:rar:") and len(parts) == 3:
+        await dshop_rarity(update, context, parts[2])
+        return
+
+    if data.startswith("dshop:list:") and len(parts) == 4:
+        rarity = parts[2]
+        try:
+            page = int(parts[3])
+        except Exception:
+            page = 0
+        await dshop_list(update, context, rarity, page)
+        return
+
+    if data.startswith("dshop:buy:") and len(parts) == 3:
+        try:
+            cat_id = int(parts[2])
+        except Exception:
+            return
+        await dshop_buy_prompt(update, context, cat_id)
+        return
+
+    if data.startswith("dshop:confirm:") and len(parts) == 3:
+        try:
+            cat_id = int(parts[2])
+        except Exception:
+            return
+        await dshop_confirm(update, context, cat_id)
+        return
+
+    await dshop_root(update, context)
+
+
+# --- Inventory Flow ---
+
+async def inv_list(update: Update, context: ContextTypes.DEFAULT_TYPE, page: int = 0) -> None:
+    user_id = _user_id_from_update(update)
+    if user_id is None:
+        return
+    await _ensure_user(user_id)
+    await _touch_economy(user_id)
+
+    items, has_prev, has_next = await fetch_inventory_page(user_id, page)
+    txt = await inventory_text(user_id, page)
+    kb = inventory_kb(items, page, has_prev, has_next)
+    await _edit_or_reply(update, txt, kb)
+
+
+async def inv_item(update: Update, context: ContextTypes.DEFAULT_TYPE, item_id: int) -> None:
+    user_id = _user_id_from_update(update)
+    if user_id is None:
+        return
+    await _ensure_user(user_id)
+    await _touch_economy(user_id)
+
+    it = await get_item_basic(item_id)
+    if it is None:
+        await _edit_or_reply(update, "Not found.", back_home_keyboard())
+        return
+
+    qty = await user_item_qty(user_id, item_id)
+    txt = await inventory_item_text(user_id, it["name"], it["type"], qty)
+    await _edit_or_reply(update, txt, inventory_item_kb())
+
+
+async def inv_cb(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if update.callback_query:
+        await update.callback_query.answer()
+
+    if not await _check_join_gate(update, context):
+        return
+
+    data = update.callback_query.data if update.callback_query else ""
+    parts = data.split(":")
+
+    if data.startswith("inv:list:") and len(parts) == 3:
+        try:
+            page = int(parts[2])
+        except Exception:
+            page = 0
+        await inv_list(update, context, page)
+        return
+
+    if data.startswith("inv:item:") and len(parts) == 3:
+        try:
+            item_id = int(parts[2])
+        except Exception:
+            return
+        await inv_item(update, context, item_id)
+        return
+
+    await inv_list(update, context, 0)
+
+
+# --- Meow / Cats / Admin / Nav ---
 
 async def meow_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not await _check_join_gate(update, context):
@@ -549,6 +765,10 @@ async def nav_cb(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         await my_cats_list(update, context, 0)
         return
 
+    if data == "nav:inv":
+        await inv_list(update, context, 0)
+        return
+
     if data == "nav:feedall":
         await feed_all_cb(update, context)
         return
@@ -599,6 +819,8 @@ def main() -> None:
     app.add_handler(CallbackQueryHandler(meow_cb, pattern=r"^act:meow$"))
 
     app.add_handler(CallbackQueryHandler(shop_cb, pattern=r"^shop:"))
+    app.add_handler(CallbackQueryHandler(dshop_cb, pattern=r"^dshop:"))
+    app.add_handler(CallbackQueryHandler(inv_cb, pattern=r"^inv:"))
     app.add_handler(CallbackQueryHandler(cats_cb, pattern=r"^cat:"))
     app.add_handler(CallbackQueryHandler(admin_cb, pattern=r"^admin:"))
     app.add_handler(CallbackQueryHandler(nav_cb, pattern=r"^nav:"))
