@@ -1512,6 +1512,8 @@ def main() -> None:
 
     app.add_handler(CallbackQueryHandler(nav_cb))
 
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
 
     app.run_polling(allowed_updates=Update.ALL_TYPES)
 
