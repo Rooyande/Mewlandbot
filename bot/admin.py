@@ -25,6 +25,8 @@ def _admin_menu_kb() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         [
             [InlineKeyboardButton("Add Cat", callback_data="admin:addcat")],
+            [InlineKeyboardButton("Add Item", callback_data="admin:additem")],
+            [InlineKeyboardButton("Item Shop", callback_data="admin:ishop")],
             [InlineKeyboardButton("Back", callback_data="nav:home")],
         ]
     )
