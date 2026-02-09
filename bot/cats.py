@@ -18,6 +18,16 @@ DUP_THRESHOLDS = {
     "Divine": 10**9,
 }
 
+DEFAULT_ESSENCE_FROM_DUP = {
+    "Common": 1,
+    "Uncommon": 2,
+    "Rare": 5,
+    "Epic": 12,
+    "Legendary": 30,
+    "Mythic": 80,
+    "Divine": 0,
+}
+
 
 @dataclass
 class CatalogCat:
@@ -131,6 +141,42 @@ async def _set_pity(user_id: int, key: str, v: int) -> None:
         await db.close()
 
 
+async def _max_level() -> int:
+    db = await open_db()
+    try:
+        cur = await db.execute("SELECT value FROM config WHERE key='max_level'")
+        row = await cur.fetchone()
+        if row is None:
+            return 20
+        try:
+            return int(row["value"])
+        except Exception:
+            return 20
+    finally:
+        await db.close()
+
+
+async def _cfg_json_in_db(db, key: str) -> Optional[dict]:
+    cur = await db.execute("SELECT value FROM config WHERE key=?", (key,))
+    row = await cur.fetchone()
+    if row is None:
+        return None
+    try:
+        return json.loads(row["value"])
+    except Exception:
+        return None
+
+
+async def _essence_for_rarity(db, rarity: str) -> int:
+    cfg = await _cfg_json_in_db(db, "essence_from_dup")
+    if isinstance(cfg, dict) and rarity in cfg:
+        try:
+            return max(0, int(cfg[rarity]))
+        except Exception:
+            pass
+    return max(0, int(DEFAULT_ESSENCE_FROM_DUP.get(rarity, 0)))
+
+
 async def _add_or_dup(user_id: int, cat: CatalogCat) -> dict:
     now = _now()
     db = await open_db()
@@ -154,19 +200,56 @@ async def _add_or_dup(user_id: int, cat: CatalogCat) -> dict:
 
         level = int(owned["level"] or 1)
         dup = int(owned["dup_counter"] or 0)
-        status = str(owned["status"] or "active")
+        prev_status = str(owned["status"] or "active")
+        status = "active" if prev_status != "active" else prev_status
 
-        if status != "active":
-            status = "active"
+        max_level = await _max_level()
 
-        if level >= await _max_level():
-            # max level => essence later (not implemented here)
-            await db.execute(
-                "INSERT INTO economy_logs(user_id, action, amount, meta_json, ts) VALUES(?,?,?,?,?)",
-                (user_id, "dup_at_max_level", 0, json.dumps({"cat_id": cat.cat_id}), now),
-            )
+        if level >= max_level:
+            essence = await _essence_for_rarity(db, cat.rarity)
+
+            if status != prev_status:
+                await db.execute(
+                    "UPDATE user_cats SET status=? WHERE id=?",
+                    (status, int(owned["id"])),
+                )
+
+            if essence > 0:
+                await db.execute(
+                    "INSERT OR IGNORE INTO resources(user_id, essence) VALUES(?, 0)",
+                    (int(user_id),),
+                )
+                await db.execute(
+                    "UPDATE resources SET essence = essence + ? WHERE user_id=?",
+                    (int(essence), int(user_id)),
+                )
+                await db.execute(
+                    "INSERT INTO economy_logs(user_id, action, amount, meta_json, ts) VALUES(?,?,?,?,?)",
+                    (
+                        int(user_id),
+                        "dup_to_essence",
+                        int(essence),
+                        json.dumps(
+                            {"cat_id": int(cat.cat_id), "rarity": str(cat.rarity), "essence": int(essence)},
+                            ensure_ascii=False,
+                        ),
+                        int(now),
+                    ),
+                )
+            else:
+                await db.execute(
+                    "INSERT INTO economy_logs(user_id, action, amount, meta_json, ts) VALUES(?,?,?,?,?)",
+                    (
+                        int(user_id),
+                        "dup_at_max_level",
+                        0,
+                        json.dumps({"cat_id": int(cat.cat_id), "rarity": str(cat.rarity)}, ensure_ascii=False),
+                        int(now),
+                    ),
+                )
+
             await db.commit()
-            return {"type": "dup_max", "level_up": False, "level": level}
+            return {"type": "dup_max", "level_up": False, "level": level, "essence": int(essence)}
 
         dup += 1
         th = DUP_THRESHOLDS.get(cat.rarity, 25)
@@ -182,21 +265,6 @@ async def _add_or_dup(user_id: int, cat: CatalogCat) -> dict:
         )
         await db.commit()
         return {"type": "dup", "level_up": level_up, "level": level, "dup": dup, "threshold": th}
-    finally:
-        await db.close()
-
-
-async def _max_level() -> int:
-    db = await open_db()
-    try:
-        cur = await db.execute("SELECT value FROM config WHERE key='max_level'")
-        row = await cur.fetchone()
-        if row is None:
-            return 20
-        try:
-            return int(row["value"])
-        except Exception:
-            return 20
     finally:
         await db.close()
 
@@ -223,13 +291,11 @@ async def open_standard_box(user_id: int, price: int = 10) -> BoxResult:
     if not cats:
         return BoxResult(False, "empty_pool")
 
-    # build rarity buckets
     buckets = {}
     for c in cats:
         if c.rarity in probs:
             buckets.setdefault(c.rarity, []).append(c)
 
-    # ensure at least one candidate exists for selected rarity
     rarities = list(probs.keys())
     weights = [float(probs[r]) for r in rarities]
 
@@ -240,12 +306,10 @@ async def open_standard_box(user_id: int, price: int = 10) -> BoxResult:
 
     chosen_rarity = "Epic" if forced_epic else rarities[_weighted_choice(rarities, weights)]
     if chosen_rarity not in buckets:
-        # fallback to any available rarity
         chosen_rarity = next(iter(buckets.keys()))
 
     cat = random.choice(buckets[chosen_rarity])
 
-    # charge MP
     db = await open_db()
     try:
         cur = await db.execute("SELECT mp_balance FROM users WHERE user_id=?", (user_id,))
@@ -293,7 +357,6 @@ async def open_premium_box(user_id: int, price: int = 250) -> BoxResult:
 
     pity_counter += 1
     if pity_counter >= pity_n:
-        # guarantee at least Epic
         eligible = [r for r in rarities if r in ("Epic", "Legendary", "Mythic")]
         elig_w = [probs[r] for r in eligible]
         chosen_rarity = eligible[_weighted_choice(eligible, elig_w)]
@@ -319,7 +382,6 @@ async def open_premium_box(user_id: int, price: int = 250) -> BoxResult:
 
     outcome = await _add_or_dup(user_id, cat)
 
-    # pity resets if Epic or above
     if chosen_rarity in ("Epic", "Legendary", "Mythic"):
         pity_counter = 0
     await _set_pity(user_id, "premium", pity_counter)
