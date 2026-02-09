@@ -39,6 +39,7 @@ def cat_details_keyboard(user_cat_id: int) -> InlineKeyboardMarkup:
                 InlineKeyboardButton("Feed", callback_data=f"cat:feed:{user_cat_id}"),
                 InlineKeyboardButton("Play", callback_data=f"cat:play:{user_cat_id}"),
             ],
+            [InlineKeyboardButton("Equip", callback_data=f"eq:menu:{user_cat_id}")],
             [
                 InlineKeyboardButton("Back to My Cats", callback_data="cat:list:0"),
                 InlineKeyboardButton("Home", callback_data="nav:home"),
@@ -136,6 +137,7 @@ async def render_cat_details(user_id: int, user_cat_id: int) -> str:
               uc.status,
               uc.last_feed_at,
               uc.last_play_at,
+              uc.equipped_items_json,
               cc.cat_id,
               cc.name,
               cc.description,
@@ -157,13 +159,25 @@ async def render_cat_details(user_id: int, user_cat_id: int) -> str:
         lf_txt = "never" if lf is None else f"{max(0, now - int(lf))}s ago"
         lp_txt = "never" if lp is None else f"{max(0, now - int(lp))}s ago"
 
+        eq_txt = "(none)"
+        try:
+            import json as _json
+            eq = _json.loads(r["equipped_items_json"] or "{}")
+            slots = eq.get("slots", []) if isinstance(eq, dict) else []
+            ids = [str(int(s.get("item_id"))) for s in slots if int(s.get("item_id", 0)) > 0]
+            if ids:
+                eq_txt = ", ".join(ids)
+        except Exception:
+            pass
+
         return (
             "Cat Details\n\n"
             f"Name: {r['name']}\n"
             f"Rarity: {r['rarity']}\n"
             f"Level: {int(r['level'] or 1)}\n"
             f"Dups: {int(r['dup_counter'] or 0)}\n"
-            f"Base Passive: {float(r['base_passive_rate'] or 0.0)} MP/h\n\n"
+            f"Base Passive: {float(r['base_passive_rate'] or 0.0)} MP/h\n"
+            f"Equipped: {eq_txt}\n\n"
             f"Last Feed: {lf_txt}\n"
             f"Last Play: {lp_txt}\n\n"
             f"{r['description']}"
