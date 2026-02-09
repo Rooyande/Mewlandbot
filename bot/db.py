@@ -19,6 +19,17 @@ CREATE TABLE IF NOT EXISTS users (
   passive_cap_hours INTEGER,
   created_at INTEGER NOT NULL
 );
+CREATE TABLE IF NOT EXISTS rate_limits (
+  user_id INTEGER NOT NULL,
+  key TEXT NOT NULL,
+  window_key TEXT NOT NULL,
+  count INTEGER NOT NULL DEFAULT 0,
+  last_ts INTEGER,
+  PRIMARY KEY (user_id, key),
+  FOREIGN KEY (user_id) REFERENCES users(user_id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_rate_limits_key ON rate_limits(key);
 
 CREATE TABLE IF NOT EXISTS cats_catalog (
   cat_id INTEGER PRIMARY KEY AUTOINCREMENT,
