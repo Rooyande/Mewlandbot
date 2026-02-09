@@ -45,30 +45,9 @@ async def _get_rarity_mult_cache(db) -> Dict[str, float]:
     return out
 
 
-async def apply_passive(user_id: int) -> int:
-    now = int(time.time())
-
+async def get_total_passive_rate(user_id: int) -> float:
     db = await open_db()
     try:
-        cur = await db.execute(
-            "SELECT last_passive_ts, passive_cap_hours FROM users WHERE user_id=?",
-            (user_id,),
-        )
-        u = await cur.fetchone()
-        if u is None:
-            return 0
-
-        last_ts = int(u["last_passive_ts"] or now)
-        cap_hours = u["passive_cap_hours"]
-        cap_hours = int(cap_hours) if cap_hours is not None else DEFAULT_PASSIVE_CAP_HOURS
-        cap_sec = max(0, cap_hours) * 3600
-
-        dt = now - last_ts
-        if dt <= 0:
-            return 0
-
-        used = dt if cap_sec == 0 else min(dt, cap_sec)
-
         cur = await db.execute(
             """
             SELECT cc.rarity, cc.base_passive_rate, uc.level
@@ -95,7 +74,38 @@ async def apply_passive(user_id: int) -> int:
 
             total_rate_per_hour += base_rate * rarity_mult * level_mult * item_mult
 
+        return float(total_rate_per_hour)
+    finally:
+        await db.close()
+
+
+async def apply_passive(user_id: int) -> int:
+    now = int(time.time())
+
+    db = await open_db()
+    try:
+        cur = await db.execute(
+            "SELECT last_passive_ts, passive_cap_hours FROM users WHERE user_id=?",
+            (user_id,),
+        )
+        u = await cur.fetchone()
+        if u is None:
+            return 0
+
+        last_ts = int(u["last_passive_ts"] or now)
+        cap_hours = u["passive_cap_hours"]
+        cap_hours = int(cap_hours) if cap_hours is not None else DEFAULT_PASSIVE_CAP_HOURS
+        cap_sec = max(0, cap_hours) * 3600
+
+        dt = now - last_ts
+        if dt <= 0:
+            return 0
+
+        used = dt if cap_sec == 0 else min(dt, cap_sec)
+
+        total_rate_per_hour = await get_total_passive_rate(user_id)
         rate_per_sec = total_rate_per_hour / 3600.0
+
         if rate_per_sec <= 0:
             await db.execute("UPDATE users SET last_passive_ts=? WHERE user_id=?", (now, user_id))
             await db.commit()
