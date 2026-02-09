@@ -17,11 +17,11 @@ from telegram.ext import (
 
 from config import (
     BOT_TOKEN,
-    OWNER_ID,
     REQUIRED_GROUP_CHAT_ID,
     REQUIRED_GROUP_INVITE_LINK,
 )
 from db import init_db, open_db
+from ui import home_keyboard, back_home_keyboard, render_home_text
 
 logging.basicConfig(
     level=logging.INFO,
@@ -95,16 +95,29 @@ async def _ensure_user(user_id: int) -> None:
         await db.close()
 
 
+async def show_home(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    user_id = _user_id_from_update(update)
+    if user_id is None:
+        return
+    await _ensure_user(user_id)
+
+    text = await render_home_text(user_id)
+
+    if update.callback_query and update.callback_query.message:
+        try:
+            await update.callback_query.message.edit_text(text, reply_markup=home_keyboard())
+        except TelegramError:
+            await update.callback_query.message.reply_text(text, reply_markup=home_keyboard())
+        return
+
+    if update.message:
+        await update.message.reply_text(text, reply_markup=home_keyboard())
+
+
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not await _check_join_gate(update, context):
         return
-
-    user_id = _user_id_from_update(update)
-    if user_id is not None:
-        await _ensure_user(user_id)
-
-    if update.message:
-        await update.message.reply_text("دسترسی فعال شد.")
+    await show_home(update, context)
 
 
 async def verify_cb(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -114,15 +127,25 @@ async def verify_cb(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not await _check_join_gate(update, context):
         return
 
-    user_id = _user_id_from_update(update)
-    if user_id is not None:
-        await _ensure_user(user_id)
+    await show_home(update, context)
 
-    if update.callback_query and update.callback_query.message:
-        try:
-            await update.callback_query.message.edit_text("دسترسی فعال شد.")
-        except TelegramError:
-            await update.callback_query.message.reply_text("دسترسی فعال شد.")
+
+async def nav_cb(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if update.callback_query:
+        await update.callback_query.answer()
+
+    if not await _check_join_gate(update, context):
+        return
+
+    q = update.callback_query
+    data = "" if q is None else (q.data or "")
+    if data == "nav:home":
+        await show_home(update, context)
+        return
+
+    if q and q.message:
+        await _ensure_user(_user_id_from_update(update) or 0)
+        await q.message.edit_text("در حال توسعه.", reply_markup=back_home_keyboard())
 
 
 def main() -> None:
@@ -135,10 +158,11 @@ def main() -> None:
 
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CallbackQueryHandler(verify_cb, pattern=r"^verify$"))
+    app.add_handler(CallbackQueryHandler(nav_cb, pattern=r"^nav:"))
+    app.add_handler(CallbackQueryHandler(nav_cb))
 
     app.run_polling(allowed_updates=Update.ALL_TYPES)
 
 
 if __name__ == "__main__":
     main()
-
