@@ -30,6 +30,7 @@ from cats_ui import (
     render_user_cats_page_text,
     render_cat_details,
     cat_details_keyboard,
+    fetch_cat_media,
 )
 from feedplay import apply_survival, feed_all, play_all
 from admin import (
@@ -129,6 +130,17 @@ async def _edit_or_reply(update: Update, text: str, reply_markup: InlineKeyboard
         await update.message.reply_text(text, reply_markup=reply_markup)
 
 
+async def _send_media(context: ContextTypes.DEFAULT_TYPE, chat_id: int, media: dict) -> None:
+    mt = media.get("media_type")
+    fid = media.get("media_file_id")
+    if not mt or not fid:
+        return
+    if mt == "photo":
+        await context.bot.send_photo(chat_id=chat_id, photo=fid)
+    elif mt == "video":
+        await context.bot.send_video(chat_id=chat_id, video=fid)
+
+
 async def show_home(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user_id = _user_id_from_update(update)
     if user_id is None:
@@ -186,6 +198,20 @@ async def shop_std(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         await _edit_or_reply(update, msg, _shop_keyboard())
         return
 
+    if update.effective_chat:
+        if res.outcome and "user_cat_id" in res.outcome:
+            media = await fetch_cat_media(user_id, int(res.outcome["user_cat_id"]))
+            if media:
+                await _send_media(context, update.effective_chat.id, media)
+        else:
+            # fallback: send catalog media
+            if res.cat and res.cat.media_type and res.cat.media_file_id:
+                await _send_media(
+                    context,
+                    update.effective_chat.id,
+                    {"media_type": res.cat.media_type, "media_file_id": res.cat.media_file_id},
+                )
+
     cat = res.cat
     out = res.outcome or {}
     text = f"Standard Box نتیجه:\n\n{cat.name} ({cat.rarity})"
@@ -216,6 +242,19 @@ async def shop_prem(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             msg = "کاتالوگ برای Premium خالی است."
         await _edit_or_reply(update, msg, _shop_keyboard())
         return
+
+    if update.effective_chat:
+        if res.outcome and "user_cat_id" in res.outcome:
+            media = await fetch_cat_media(user_id, int(res.outcome["user_cat_id"]))
+            if media:
+                await _send_media(context, update.effective_chat.id, media)
+        else:
+            if res.cat and res.cat.media_type and res.cat.media_file_id:
+                await _send_media(
+                    context,
+                    update.effective_chat.id,
+                    {"media_type": res.cat.media_type, "media_file_id": res.cat.media_file_id},
+                )
 
     cat = res.cat
     out = res.outcome or {}
@@ -300,6 +339,11 @@ async def my_cat_open(update: Update, context: ContextTypes.DEFAULT_TYPE, user_c
         return
     await _ensure_user(user_id)
     await _touch_economy(user_id)
+
+    if update.effective_chat:
+        media = await fetch_cat_media(user_id, user_cat_id)
+        if media:
+            await _send_media(context, update.effective_chat.id, media)
 
     text = await render_cat_details(user_id, user_cat_id)
     kb = cat_details_keyboard(user_cat_id)
