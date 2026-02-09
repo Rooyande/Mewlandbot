@@ -1,14 +1,24 @@
 import json
+import time
 from dataclasses import dataclass
-from typing import Optional
+from typing import Optional, Tuple
 
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import ContextTypes
 
+from config import OWNER_ID
 from db import open_db
 
 
 WZ_KEY = "admin_additem"
+
+
+def _now() -> int:
+    return int(time.time())
+
+
+def _is_owner(user_id: int) -> bool:
+    return user_id == OWNER_ID
 
 
 @dataclass
@@ -44,7 +54,7 @@ def _draft_clear(ctx: ContextTypes.DEFAULT_TYPE) -> None:
 
 
 def _is_running(ctx: ContextTypes.DEFAULT_TYPE) -> bool:
-    return bool(ctx.user_data.get(WZ_KEY))
+    return WZ_KEY in ctx.user_data
 
 
 def _next_field(d: AddItemDraft) -> str:
@@ -63,7 +73,7 @@ def _next_field(d: AddItemDraft) -> str:
     return "done"
 
 
-def additem_confirm_kb() -> InlineKeyboardMarkup:
+def _confirm_kb() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         [
             [InlineKeyboardButton("Confirm", callback_data="admin:additem:confirm")],
@@ -72,18 +82,19 @@ def additem_confirm_kb() -> InlineKeyboardMarkup:
     )
 
 
-async def admin_additem_start(admin_id: int, context: ContextTypes.DEFAULT_TYPE) -> tuple[str, InlineKeyboardMarkup | None]:
-    d = AddItemDraft()
-    _draft_set(context, d)
-    return "Add Item\n\nName را ارسال کنید.", None
+async def admin_additem_start(user_id: int, context: ContextTypes.DEFAULT_TYPE) -> Tuple[str, InlineKeyboardMarkup | None]:
+    if not _is_owner(user_id):
+        return ("دسترسی ندارید.", None)
+    _draft_set(context, AddItemDraft())
+    return ("Add Item\n\nName را ارسال کنید.", None)
 
 
-async def admin_additem_cancel(context: ContextTypes.DEFAULT_TYPE) -> tuple[str, InlineKeyboardMarkup | None]:
+async def admin_additem_cancel(context: ContextTypes.DEFAULT_TYPE) -> Tuple[str, InlineKeyboardMarkup | None]:
     _draft_clear(context)
-    return "لغو شد.", None
+    return ("لغو شد.", None)
 
 
-async def admin_additem_preview(context: ContextTypes.DEFAULT_TYPE) -> tuple[str, InlineKeyboardMarkup]:
+async def _preview(context: ContextTypes.DEFAULT_TYPE) -> Tuple[str, InlineKeyboardMarkup]:
     d = _draft_get(context)
     txt = (
         "Add Item Preview\n\n"
@@ -94,15 +105,19 @@ async def admin_additem_preview(context: ContextTypes.DEFAULT_TYPE) -> tuple[str
         f"Effect JSON:\n{d.effect_json}\n\n"
         f"Durability JSON:\n{d.durability_rules_json}\n"
     )
-    return txt, additem_confirm_kb()
+    return txt, _confirm_kb()
 
 
-async def admin_additem_handle_message(admin_id: int, update: Update, context: ContextTypes.DEFAULT_TYPE) -> tuple[str, InlineKeyboardMarkup | None] | None:
+async def admin_additem_handle_message(
+    user_id: int, update: Update, context: ContextTypes.DEFAULT_TYPE
+) -> Optional[Tuple[str, InlineKeyboardMarkup | None]]:
     if not _is_running(context):
         return None
+    if not _is_owner(user_id):
+        return ("دسترسی ندارید.", None)
 
     if not update.message or update.message.text is None:
-        return "فقط متن ارسال کنید.", None
+        return ("فقط متن ارسال کنید.", None)
 
     text = update.message.text.strip()
     d = _draft_get(context)
@@ -110,64 +125,68 @@ async def admin_additem_handle_message(admin_id: int, update: Update, context: C
 
     if nf == "name":
         if len(text) < 2:
-            return "Name نامعتبر است. دوباره ارسال کنید.", None
+            return ("Name نامعتبر است.", None)
         d.name = text
         _draft_set(context, d)
-        return "Type را ارسال کنید. (مثلاً utility یا cosmetic)", None
+        return ("Type را ارسال کنید. (مثلاً utility یا cosmetic)", None)
 
     if nf == "type":
         if len(text) < 2:
-            return "Type نامعتبر است. دوباره ارسال کنید.", None
+            return ("Type نامعتبر است.", None)
         d.type = text
         _draft_set(context, d)
-        return "Effect JSON را ارسال کنید. (یا 'none')", None
+        return ("Effect JSON را ارسال کنید. (یا 'none')", None)
 
     if nf == "effect_json":
         if text.lower() == "none":
-            d.effect_json = ""
+            d.effect_json = "{}"
         else:
             try:
                 json.loads(text)
-                d.effect_json = text
             except Exception:
-                return "Effect JSON نامعتبر است. JSON صحیح یا 'none' ارسال کنید.", None
+                return ("Effect JSON نامعتبر است.", None)
+            d.effect_json = text
         _draft_set(context, d)
-        return "Durability Rules JSON را ارسال کنید. (یا 'none')", None
+        return ("Durability Rules JSON را ارسال کنید. (یا 'none')", None)
 
     if nf == "durability_rules_json":
         if text.lower() == "none":
-            d.durability_rules_json = ""
+            d.durability_rules_json = "{}"
         else:
             try:
                 json.loads(text)
-                d.durability_rules_json = text
             except Exception:
-                return "Durability JSON نامعتبر است. JSON صحیح یا 'none' ارسال کنید.", None
+                return ("Durability JSON نامعتبر است.", None)
+            d.durability_rules_json = text
         _draft_set(context, d)
-        return "Tradable را ارسال کنید. (0 یا 1)", None
+        return ("Tradable را ارسال کنید. (0 یا 1)", None)
 
     if nf == "tradable":
         if text not in ("0", "1"):
-            return "Tradable فقط 0 یا 1.", None
+            return ("Tradable فقط 0 یا 1.", None)
         d.tradable = int(text)
         _draft_set(context, d)
-        return "Active را ارسال کنید. (0 یا 1)", None
+        return ("Active را ارسال کنید. (0 یا 1)", None)
 
     if nf == "active":
         if text not in ("0", "1"):
-            return "Active فقط 0 یا 1.", None
+            return ("Active فقط 0 یا 1.", None)
         d.active = int(text)
         _draft_set(context, d)
-        return await admin_additem_preview(context)
+        return await _preview(context)
 
-    return await admin_additem_preview(context)
+    return await _preview(context)
 
 
-async def admin_additem_confirm(admin_id: int, context: ContextTypes.DEFAULT_TYPE) -> tuple[str, InlineKeyboardMarkup | None]:
+async def admin_additem_confirm(user_id: int, context: ContextTypes.DEFAULT_TYPE) -> Tuple[str, InlineKeyboardMarkup | None]:
+    if not _is_owner(user_id):
+        return ("دسترسی ندارید.", None)
+
     d = _draft_get(context)
     if _next_field(d) != "done":
-        return "Wizard کامل نیست.", None
+        return ("Wizard کامل نیست.", None)
 
+    now = _now()
     db = await open_db()
     try:
         cur = await db.execute(
@@ -178,22 +197,22 @@ async def admin_additem_confirm(admin_id: int, context: ContextTypes.DEFAULT_TYP
             (
                 d.name,
                 d.type,
-                d.effect_json or "",
-                d.durability_rules_json or "",
+                d.effect_json or "{}",
+                d.durability_rules_json or "{}",
                 int(d.tradable or 0),
                 int(d.active or 1),
             ),
         )
-        item_id = cur.lastrowid
+        item_id = int(cur.lastrowid)
 
         await db.execute(
-            "INSERT INTO admin_logs(admin_id, action, meta_json, ts) VALUES(?,?,?,strftime('%s','now'))",
+            "INSERT INTO admin_logs(admin_id, action, meta_json, ts) VALUES(?,?,?,?)",
             (
-                admin_id,
+                int(user_id),
                 "add_item",
                 json.dumps(
                     {
-                        "item_id": int(item_id),
+                        "item_id": item_id,
                         "name": d.name,
                         "type": d.type,
                         "tradable": int(d.tradable or 0),
@@ -201,11 +220,12 @@ async def admin_additem_confirm(admin_id: int, context: ContextTypes.DEFAULT_TYP
                     },
                     ensure_ascii=False,
                 ),
+                now,
             ),
         )
-
         await db.commit()
-        _draft_clear(context)
-        return f"Item added.\n\nitem_id: {int(item_id)}", None
     finally:
         await db.close()
+
+    _draft_clear(context)
+    return (f"ثبت شد.\n\nitem_id: {item_id}", None)
