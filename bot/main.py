@@ -19,6 +19,7 @@ from config import (
 from db import init_db, open_db
 from ui import home_keyboard, back_home_keyboard, render_home_text
 from economy import meow_try
+from passive import apply_passive
 
 logging.basicConfig(
     level=logging.INFO,
@@ -92,11 +93,17 @@ async def _ensure_user(user_id: int) -> None:
         await db.close()
 
 
+async def _touch_passive(user_id: int) -> None:
+    await apply_passive(user_id)
+
+
 async def show_home(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user_id = _user_id_from_update(update)
     if user_id is None:
         return
+
     await _ensure_user(user_id)
+    await _touch_passive(user_id)
 
     text = await render_home_text(user_id)
 
@@ -134,7 +141,9 @@ async def meow_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user_id = _user_id_from_update(update)
     if user_id is None:
         return
+
     await _ensure_user(user_id)
+    await _touch_passive(user_id)
 
     res = await meow_try(user_id)
     if not res.ok:
@@ -158,7 +167,9 @@ async def meow_cb(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user_id = _user_id_from_update(update)
     if user_id is None:
         return
+
     await _ensure_user(user_id)
+    await _touch_passive(user_id)
 
     res = await meow_try(user_id)
     if not res.ok:
@@ -180,6 +191,13 @@ async def nav_cb(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not await _check_join_gate(update, context):
         return
 
+    user_id = _user_id_from_update(update)
+    if user_id is None:
+        return
+
+    await _ensure_user(user_id)
+    await _touch_passive(user_id)
+
     q = update.callback_query
     data = "" if q is None else (q.data or "")
 
@@ -188,9 +206,6 @@ async def nav_cb(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         return
 
     if q and q.message:
-        user_id = _user_id_from_update(update)
-        if user_id is not None:
-            await _ensure_user(user_id)
         await q.message.edit_text("در حال توسعه.", reply_markup=back_home_keyboard())
 
 
