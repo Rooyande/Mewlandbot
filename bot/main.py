@@ -60,6 +60,24 @@ from inventory_ui import (
     inventory_item_kb,
 )
 from items import get_item_basic, user_item_qty
+from equip import equip_item, unequip_item
+from equip_ui import (
+    equip_menu_kb,
+    equipped_summary_text,
+    fetch_equipable_items_page,
+    equip_list_text,
+    equip_list_kb,
+)
+from item_shop_ui import (
+    item_shop_root_kb,
+    item_shop_root_text,
+    fetch_item_shop_page,
+    item_shop_list_text,
+    item_shop_list_kb,
+    item_buy_confirm_text,
+    item_buy_confirm_kb,
+)
+from item_shop import buy_item, get_item_for_sale
 
 logging.basicConfig(
     level=logging.INFO,
@@ -192,6 +210,7 @@ def _shop_keyboard() -> InlineKeyboardMarkup:
             [InlineKeyboardButton("Standard Box", callback_data="shop:std")],
             [InlineKeyboardButton("Premium Box", callback_data="shop:prem")],
             [InlineKeyboardButton("Direct Purchase", callback_data="dshop:root")],
+            [InlineKeyboardButton("Item Shop", callback_data="ishop:root")],
             [InlineKeyboardButton("Back", callback_data="nav:home")],
         ]
     )
@@ -421,6 +440,192 @@ async def dshop_cb(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         return
 
     await dshop_root(update, context)
+
+
+# --- Item Shop Flow ---
+
+async def ishop_root(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    txt = await item_shop_root_text()
+    await _edit_or_reply(update, txt, item_shop_root_kb())
+
+
+async def ishop_list(update: Update, context: ContextTypes.DEFAULT_TYPE, page: int) -> None:
+    user_id = _user_id_from_update(update)
+    if user_id is None:
+        return
+    await _ensure_user(user_id)
+    await _touch_economy(user_id)
+
+    items, has_prev, has_next = await fetch_item_shop_page(page)
+    txt = await item_shop_list_text(page)
+    kb = item_shop_list_kb(items, page, has_prev, has_next)
+    await _edit_or_reply(update, txt, kb)
+
+
+async def ishop_buy_prompt(update: Update, context: ContextTypes.DEFAULT_TYPE, item_id: int) -> None:
+    txt = await item_buy_confirm_text(item_id)
+    kb = item_buy_confirm_kb(item_id)
+    await _edit_or_reply(update, txt, kb)
+
+
+async def ishop_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE, item_id: int) -> None:
+    user_id = _user_id_from_update(update)
+    if user_id is None:
+        return
+    await _ensure_user(user_id)
+    await _touch_economy(user_id)
+
+    res = await buy_item(user_id, item_id, qty=1)
+    if not res.ok:
+        msg = "Error."
+        if res.reason == "no_mp":
+            msg = "MP کافی نیست."
+        elif res.reason == "weekly_cap":
+            msg = "سقف هفتگی خرید آیتم پر شده."
+        elif res.reason == "not_found":
+            msg = "یافت نشد."
+        await _edit_or_reply(update, msg, item_shop_root_kb())
+        return
+
+    await _edit_or_reply(update, f"Purchased\n\n{res.name}\nCost: {res.price} MP", item_shop_root_kb())
+
+
+async def ishop_cb(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if update.callback_query:
+        await update.callback_query.answer()
+
+    if not await _check_join_gate(update, context):
+        return
+
+    data = update.callback_query.data if update.callback_query else ""
+    parts = data.split(":")
+
+    if data == "ishop:root":
+        await ishop_root(update, context)
+        return
+
+    if data.startswith("ishop:list:") and len(parts) == 3:
+        try:
+            page = int(parts[2])
+        except Exception:
+            page = 0
+        await ishop_list(update, context, page)
+        return
+
+    if data.startswith("ishop:buy:") and len(parts) == 3:
+        try:
+            item_id = int(parts[2])
+        except Exception:
+            return
+        await ishop_buy_prompt(update, context, item_id)
+        return
+
+    if data.startswith("ishop:confirm:") and len(parts) == 3:
+        try:
+            item_id = int(parts[2])
+        except Exception:
+            return
+        await ishop_confirm(update, context, item_id)
+        return
+
+    await ishop_root(update, context)
+
+
+# --- Equip Flow ---
+
+async def eq_menu(update: Update, context: ContextTypes.DEFAULT_TYPE, user_cat_id: int) -> None:
+    user_id = _user_id_from_update(update)
+    if user_id is None:
+        return
+    await _ensure_user(user_id)
+    await _touch_economy(user_id)
+
+    txt = await equipped_summary_text(user_id, user_cat_id)
+    await _edit_or_reply(update, txt, equip_menu_kb(user_cat_id))
+
+
+async def eq_list(update: Update, context: ContextTypes.DEFAULT_TYPE, user_cat_id: int, page: int) -> None:
+    user_id = _user_id_from_update(update)
+    if user_id is None:
+        return
+    await _ensure_user(user_id)
+    await _touch_economy(user_id)
+
+    items, has_prev, has_next = await fetch_equipable_items_page(user_id, user_cat_id, page)
+    txt = await equip_list_text(user_cat_id, page)
+    kb = equip_list_kb(user_cat_id, items, page, has_prev, has_next)
+    await _edit_or_reply(update, txt, kb)
+
+
+async def eq_do_equip(update: Update, context: ContextTypes.DEFAULT_TYPE, user_cat_id: int, item_id: int) -> None:
+    user_id = _user_id_from_update(update)
+    if user_id is None:
+        return
+    await _ensure_user(user_id)
+    await _touch_economy(user_id)
+
+    res = await equip_item(user_id, user_cat_id, item_id)
+    if not res.ok:
+        msg = "Error."
+        if res.reason == "no_item":
+            msg = "این آیتم را ندارید."
+        elif res.reason == "no_slot":
+            msg = "اسلات خالی ندارید."
+        elif res.reason == "already_equipped":
+            msg = "قبلاً مجهز شده."
+        elif res.reason == "cat_not_found":
+            msg = "گربه یافت نشد."
+        await _edit_or_reply(update, msg, equip_menu_kb(user_cat_id))
+        return
+
+    await eq_menu(update, context, user_cat_id)
+
+
+async def eq_do_unequip(update: Update, context: ContextTypes.DEFAULT_TYPE, user_cat_id: int, item_id: int) -> None:
+    user_id = _user_id_from_update(update)
+    if user_id is None:
+        return
+    await _ensure_user(user_id)
+    await _touch_economy(user_id)
+
+    res = await unequip_item(user_id, user_cat_id, item_id)
+    if not res.ok:
+        msg = "Error."
+        if res.reason == "not_equipped":
+            msg = "مجهز نیست."
+        elif res.reason == "cat_not_found":
+            msg = "گربه یافت نشد."
+        await _edit_or_reply(update, msg, equip_menu_kb(user_cat_id))
+        return
+
+    await eq_menu(update, context, user_cat_id)
+
+
+async def eq_cb(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if update.callback_query:
+        await update.callback_query.answer()
+
+    if not await _check_join_gate(update, context):
+        return
+
+    data = update.callback_query.data if update.callback_query else ""
+    parts = data.split(":")
+
+    if data.startswith("eq:menu:") and len(parts) == 3:
+        await eq_menu(update, context, int(parts[2]))
+        return
+
+    if data.startswith("eq:list:") and len(parts) == 4:
+        await eq_list(update, context, int(parts[2]), int(parts[3]))
+        return
+
+    if data.startswith("eq:eq:") and len(parts) == 4:
+        await eq_do_equip(update, context, int(parts[2]), int(parts[3]))
+        return
+
+    if data.startswith("eq:uneq:") and len(parts) == 4:
+        await eq_do_unequip(update, context, int(parts[2]), int(parts[3]))
+        return
 
 
 # --- Inventory Flow ---
@@ -820,6 +1025,8 @@ def main() -> None:
 
     app.add_handler(CallbackQueryHandler(shop_cb, pattern=r"^shop:"))
     app.add_handler(CallbackQueryHandler(dshop_cb, pattern=r"^dshop:"))
+    app.add_handler(CallbackQueryHandler(ishop_cb, pattern=r"^ishop:"))
+    app.add_handler(CallbackQueryHandler(eq_cb, pattern=r"^eq:"))
     app.add_handler(CallbackQueryHandler(inv_cb, pattern=r"^inv:"))
     app.add_handler(CallbackQueryHandler(cats_cb, pattern=r"^cat:"))
     app.add_handler(CallbackQueryHandler(admin_cb, pattern=r"^admin:"))
