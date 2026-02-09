@@ -20,6 +20,7 @@ from db import init_db, open_db
 from ui import home_keyboard, back_home_keyboard, render_home_text
 from economy import meow_try
 from passive import apply_passive
+from cats import open_standard_box, open_premium_box
 
 logging.basicConfig(
     level=logging.INFO,
@@ -97,6 +98,17 @@ async def _touch_passive(user_id: int) -> None:
     await apply_passive(user_id)
 
 
+async def _edit_or_reply(update: Update, text: str, reply_markup: InlineKeyboardMarkup) -> None:
+    if update.callback_query and update.callback_query.message:
+        try:
+            await update.callback_query.message.edit_text(text, reply_markup=reply_markup)
+        except TelegramError:
+            await update.callback_query.message.reply_text(text, reply_markup=reply_markup)
+        return
+    if update.message:
+        await update.message.reply_text(text, reply_markup=reply_markup)
+
+
 async def show_home(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user_id = _user_id_from_update(update)
     if user_id is None:
@@ -106,16 +118,7 @@ async def show_home(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await _touch_passive(user_id)
 
     text = await render_home_text(user_id)
-
-    if update.callback_query and update.callback_query.message:
-        try:
-            await update.callback_query.message.edit_text(text, reply_markup=home_keyboard())
-        except TelegramError:
-            await update.callback_query.message.reply_text(text, reply_markup=home_keyboard())
-        return
-
-    if update.message:
-        await update.message.reply_text(text, reply_markup=home_keyboard())
+    await _edit_or_reply(update, text, home_keyboard())
 
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -127,11 +130,85 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 async def verify_cb(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if update.callback_query:
         await update.callback_query.answer()
-
     if not await _check_join_gate(update, context):
         return
-
     await show_home(update, context)
+
+
+def _shop_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        [
+            [InlineKeyboardButton("Standard Box", callback_data="shop:std")],
+            [InlineKeyboardButton("Premium Box", callback_data="shop:prem")],
+            [InlineKeyboardButton("Back", callback_data="nav:home")],
+        ]
+    )
+
+
+async def shop_view(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    await _edit_or_reply(update, "Shop", _shop_keyboard())
+
+
+async def shop_std(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    user_id = _user_id_from_update(update)
+    if user_id is None:
+        return
+    await _ensure_user(user_id)
+    await _touch_passive(user_id)
+
+    res = await open_standard_box(user_id)
+    if not res.ok:
+        msg = "Shop error."
+        if res.reason == "no_mp":
+            msg = "MP کافی نیست."
+        elif res.reason == "empty_pool":
+            msg = "کاتالوگ برای Standard خالی است."
+        await _edit_or_reply(update, msg, _shop_keyboard())
+        return
+
+    cat = res.cat
+    out = res.outcome or {}
+    text = f"Standard Box نتیجه:\n\n{cat.name} ({cat.rarity})"
+    if out.get("type") == "new":
+        text += "\nNew cat!"
+    elif out.get("type") in ("dup", "dup_max"):
+        if out.get("level_up"):
+            text += f"\nDuplicate → Level Up! (Lvl {out.get('level')})"
+        else:
+            text += f"\nDuplicate. (Lvl {out.get('level')})"
+
+    await _edit_or_reply(update, text, _shop_keyboard())
+
+
+async def shop_prem(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    user_id = _user_id_from_update(update)
+    if user_id is None:
+        return
+    await _ensure_user(user_id)
+    await _touch_passive(user_id)
+
+    res = await open_premium_box(user_id)
+    if not res.ok:
+        msg = "Shop error."
+        if res.reason == "no_mp":
+            msg = "MP کافی نیست."
+        elif res.reason == "empty_pool":
+            msg = "کاتالوگ برای Premium خالی است."
+        await _edit_or_reply(update, msg, _shop_keyboard())
+        return
+
+    cat = res.cat
+    out = res.outcome or {}
+    text = f"Premium Box نتیجه:\n\n{cat.name} ({cat.rarity})"
+    if out.get("type") == "new":
+        text += "\nNew cat!"
+    elif out.get("type") in ("dup", "dup_max"):
+        if out.get("level_up"):
+            text += f"\nDuplicate → Level Up! (Lvl {out.get('level')})"
+        else:
+            text += f"\nDuplicate. (Lvl {out.get('level')})"
+
+    await _edit_or_reply(update, text, _shop_keyboard())
 
 
 async def meow_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -205,8 +282,27 @@ async def nav_cb(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         await show_home(update, context)
         return
 
-    if q and q.message:
-        await q.message.edit_text("در حال توسعه.", reply_markup=back_home_keyboard())
+    if data == "nav:shop":
+        await shop_view(update, context)
+        return
+
+    await _edit_or_reply(update, "در حال توسعه.", back_home_keyboard())
+
+
+async def shop_cb(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if update.callback_query:
+        await update.callback_query.answer()
+
+    if not await _check_join_gate(update, context):
+        return
+
+    data = update.callback_query.data if update.callback_query else ""
+    if data == "shop:std":
+        await shop_std(update, context)
+    elif data == "shop:prem":
+        await shop_prem(update, context)
+    else:
+        await shop_view(update, context)
 
 
 def main() -> None:
@@ -222,7 +318,10 @@ def main() -> None:
 
     app.add_handler(CallbackQueryHandler(verify_cb, pattern=r"^verify$"))
     app.add_handler(CallbackQueryHandler(meow_cb, pattern=r"^act:meow$"))
+
+    app.add_handler(CallbackQueryHandler(shop_cb, pattern=r"^shop:"))
     app.add_handler(CallbackQueryHandler(nav_cb, pattern=r"^nav:"))
+
     app.add_handler(CallbackQueryHandler(nav_cb))
 
     app.run_polling(allowed_updates=Update.ALL_TYPES)
