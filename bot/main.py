@@ -1512,7 +1512,7 @@ def main() -> None:
 
     app.add_handler(CallbackQueryHandler(nav_cb))
 
-    import asyncio
+
     asyncio.run(app.run_polling(allowed_updates=Update.ALL_TYPES))
 
 
