@@ -57,7 +57,7 @@ def item_shop_list_kb(items: List[dict], page: int, has_prev: bool, has_next: bo
             [
                 InlineKeyboardButton(
                     f"{it['name']} • {it['price']} MP",
-                    callback_data=f"ishop:buy:{it['item_id']}",
+                    callback_data=f"ishop:buy:{it['item_id']}:{page}",
                 )
             ]
         )
@@ -80,10 +80,10 @@ async def item_buy_confirm_text(item_id: int) -> str:
     return f"Confirm Purchase\n\n{it.name}\nType: {it.type}\nCost: {it.price} MP"
 
 
-def item_buy_confirm_kb(item_id: int) -> InlineKeyboardMarkup:
+def item_buy_confirm_kb(item_id: int, back_page: int) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         [
-            [InlineKeyboardButton("Confirm", callback_data=f"ishop:confirm:{item_id}")],
-            [InlineKeyboardButton("Back", callback_data="ishop:list:0")],
+            [InlineKeyboardButton("Confirm", callback_data=f"ishop:confirm:{item_id}:{back_page}")],
+            [InlineKeyboardButton("Back", callback_data=f"ishop:list:{back_page}")],
         ]
     )
