@@ -20,7 +20,7 @@ from config import (
     REQUIRED_GROUP_INVITE_LINK,
     OWNER_ID,
 )
-from db import init_db, open_db
+from db import init_db, open_db, get_config
 from ui import home_keyboard, back_home_keyboard, render_home_text
 from economy import meow_try
 from passive import apply_passive
@@ -34,13 +34,35 @@ from cats_ui import (
     fetch_cat_media,
 )
 from feedplay import apply_survival, feed_all, play_all
+
 from admin import (
+    is_admin,
+    is_banned,
     admin_menu_keyboard,
     admin_menu_text,
     admin_addcat_start,
     admin_addcat_handle_message,
     admin_addcat_confirm,
     admin_addcat_cancel,
+    admin_setgroup_start,
+    admin_setgroup_handle_message,
+    admin_setgroup_confirm,
+    admin_setgroup_cancel,
+    admin_setcfg_start,
+    admin_setcfg_handle_message,
+    admin_setcfg_confirm,
+    admin_setcfg_cancel,
+    admin_grant_start,
+    admin_grant_pick,
+    admin_grant_handle_message,
+    admin_grant_confirm,
+    admin_grant_cancel,
+    admin_ban_start,
+    admin_ban_pick,
+    admin_ban_handle_message,
+    admin_ban_confirm,
+    admin_ban_cancel,
+    admin_logs_page,
 )
 from admin_items import (
     admin_additem_start,
@@ -61,6 +83,7 @@ from admin_item_shop import (
     set_weekly_cap_start,
     set_weekly_cap_handle_message,
 )
+
 from shop_ui import (
     direct_shop_root_kb,
     direct_shop_root_text,
@@ -72,6 +95,7 @@ from shop_ui import (
     RARITIES as DSHOP_RARITIES,
 )
 from shop import direct_buy
+
 from inventory_ui import (
     fetch_inventory_page,
     inventory_text,
@@ -80,6 +104,7 @@ from inventory_ui import (
     inventory_item_kb,
 )
 from items import get_item_basic, user_item_qty
+
 from equip import equip_item, unequip_item
 from equip_ui import (
     equip_menu_kb,
@@ -88,6 +113,7 @@ from equip_ui import (
     equip_list_text,
     equip_list_kb,
 )
+
 from item_shop_ui import (
     item_shop_root_kb,
     item_shop_root_text,
@@ -99,6 +125,7 @@ from item_shop_ui import (
 )
 from item_shop import buy_item
 
+from settings_ui import settings_root_text, settings_root_kb, settings_handle
 from shelter_ui import shelter_text, shelter_kb, shelter_upgrade_and_text
 from events_ui import (
     events_root_text,
@@ -109,7 +136,6 @@ from events_ui import (
     event_cat_text,
     event_cat_kb,
 )
-from settings_ui import settings_text, settings_apply
 
 logging.basicConfig(
     level=logging.INFO,
@@ -124,23 +150,50 @@ def _user_id_from_update(update: Update) -> int | None:
     return None
 
 
-def _join_keyboard() -> InlineKeyboardMarkup:
+async def _cfg_int(key: str, default: int) -> int:
+    v = await get_config(key)
+    if v is None:
+        return int(default)
+    try:
+        return int(float(v))
+    except Exception:
+        return int(default)
+
+
+async def _cfg_str(key: str, default: str) -> str:
+    v = await get_config(key)
+    if v is None:
+        return default
+    return str(v)
+
+
+async def _required_group_chat_id() -> int:
+    return await _cfg_int("required_group_chat_id", int(REQUIRED_GROUP_CHAT_ID))
+
+
+async def _required_group_invite_link() -> str:
+    return await _cfg_str("required_group_invite_link", str(REQUIRED_GROUP_INVITE_LINK or ""))
+
+
+async def _join_keyboard() -> InlineKeyboardMarkup:
     buttons = []
-    if REQUIRED_GROUP_INVITE_LINK:
-        buttons.append([InlineKeyboardButton("Join", url=REQUIRED_GROUP_INVITE_LINK)])
+    link = await _required_group_invite_link()
+    if link:
+        buttons.append([InlineKeyboardButton("Join", url=link)])
     buttons.append([InlineKeyboardButton("Verify", callback_data="verify")])
     return InlineKeyboardMarkup(buttons)
 
 
 async def _send_or_edit_join_gate(update: Update, context: ContextTypes.DEFAULT_TYPE, text: str) -> None:
+    kb = await _join_keyboard()
     if update.callback_query and update.callback_query.message:
         try:
-            await update.callback_query.message.edit_text(text, reply_markup=_join_keyboard())
+            await update.callback_query.message.edit_text(text, reply_markup=kb)
         except TelegramError:
-            await update.callback_query.message.reply_text(text, reply_markup=_join_keyboard())
+            await update.callback_query.message.reply_text(text, reply_markup=kb)
         return
     if update.message:
-        await update.message.reply_text(text, reply_markup=_join_keyboard())
+        await update.message.reply_text(text, reply_markup=kb)
 
 
 async def _check_join_gate(update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:
@@ -148,12 +201,17 @@ async def _check_join_gate(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     if user_id is None:
         return False
 
-    if REQUIRED_GROUP_CHAT_ID == 0:
+    if await is_banned(user_id):
+        await _send_or_edit_join_gate(update, context, "دسترسی شما مسدود است.")
+        return False
+
+    gid = await _required_group_chat_id()
+    if int(gid) == 0:
         await _send_or_edit_join_gate(update, context, "بات هنوز پیکربندی نشده است.")
         return False
 
     try:
-        member = await context.bot.get_chat_member(REQUIRED_GROUP_CHAT_ID, user_id)
+        member = await context.bot.get_chat_member(int(gid), int(user_id))
         status = getattr(member, "status", None)
         ok = status in ("member", "administrator", "creator")
         if not ok:
@@ -172,12 +230,9 @@ async def _ensure_user(user_id: int) -> None:
         await db.execute(
             "INSERT OR IGNORE INTO users(user_id, mp_balance, last_passive_ts, shelter_level, created_at) "
             "VALUES(?, 0, ?, 1, ?)",
-            (user_id, now, now),
+            (int(user_id), int(now), int(now)),
         )
-        await db.execute(
-            "INSERT OR IGNORE INTO resources(user_id, essence) VALUES(?, 0)",
-            (user_id,),
-        )
+        await db.execute("INSERT OR IGNORE INTO resources(user_id, essence) VALUES(?, 0)", (int(user_id),))
         await db.commit()
     finally:
         await db.close()
@@ -210,14 +265,27 @@ async def _send_media(context: ContextTypes.DEFAULT_TYPE, chat_id: int, media: d
         await context.bot.send_video(chat_id=chat_id, video=fid)
 
 
+async def _send_catalog_media(context: ContextTypes.DEFAULT_TYPE, chat_id: int, cat_id: int) -> None:
+    db = await open_db()
+    try:
+        cur = await db.execute(
+            "SELECT media_type, media_file_id FROM cats_catalog WHERE cat_id=? AND active=1",
+            (int(cat_id),),
+        )
+        r = await cur.fetchone()
+    finally:
+        await db.close()
+    if r is None:
+        return
+    await _send_media(context, chat_id, {"media_type": r["media_type"], "media_file_id": r["media_file_id"]})
+
+
 async def show_home(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user_id = _user_id_from_update(update)
     if user_id is None:
         return
-
     await _ensure_user(user_id)
     await _touch_economy(user_id)
-
     text = await render_home_text(user_id)
     await _edit_or_reply(update, text, home_keyboard(user_id))
 
@@ -292,8 +360,6 @@ async def shop_std(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             text += f"\nDuplicate → Level Up! (Lvl {out.get('level')})"
         else:
             text += f"\nDuplicate. (Lvl {out.get('level')})"
-        if out.get("type") == "dup_max" and "essence" in out:
-            text += f"\nEssence: +{out.get('essence')}"
 
     await _edit_or_reply(update, text, _shop_keyboard())
 
@@ -338,8 +404,6 @@ async def shop_prem(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             text += f"\nDuplicate → Level Up! (Lvl {out.get('level')})"
         else:
             text += f"\nDuplicate. (Lvl {out.get('level')})"
-        if out.get("type") == "dup_max" and "essence" in out:
-            text += f"\nEssence: +{out.get('essence')}"
 
     await _edit_or_reply(update, text, _shop_keyboard())
 
@@ -370,7 +434,7 @@ async def dshop_list(update: Update, context: ContextTypes.DEFAULT_TYPE, rarity:
 async def dshop_buy_prompt(update: Update, context: ContextTypes.DEFAULT_TYPE, cat_id: int) -> None:
     db = await open_db()
     try:
-        cur = await db.execute("SELECT name, rarity FROM cats_catalog WHERE cat_id=?", (cat_id,))
+        cur = await db.execute("SELECT name, rarity FROM cats_catalog WHERE cat_id=?", (int(cat_id),))
         r = await cur.fetchone()
     finally:
         await db.close()
@@ -386,7 +450,7 @@ async def dshop_buy_prompt(update: Update, context: ContextTypes.DEFAULT_TYPE, c
         return
 
     txt = await direct_buy_confirm_text(name, rarity)
-    kb = direct_buy_confirm_kb(cat_id, rarity)
+    kb = direct_buy_confirm_kb(int(cat_id), rarity)
     await _edit_or_reply(update, txt, kb)
 
 
@@ -397,7 +461,7 @@ async def dshop_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE, cat_
     await _ensure_user(user_id)
     await _touch_economy(user_id)
 
-    res = await direct_buy(user_id, cat_id)
+    res = await direct_buy(user_id, int(cat_id))
     if not res.ok:
         msg = "Error."
         if res.reason == "no_mp":
@@ -427,8 +491,6 @@ async def dshop_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE, cat_
             txt += f"\nDuplicate → Level Up! (Lvl {out.get('level')})"
         else:
             txt += f"\nDuplicate. (Lvl {out.get('level')})"
-        if out.get("type") == "dup_max" and "essence" in out:
-            txt += f"\nEssence: +{out.get('essence')}"
 
     await _edit_or_reply(update, txt, direct_shop_root_kb())
 
@@ -499,8 +561,8 @@ async def ishop_list(update: Update, context: ContextTypes.DEFAULT_TYPE, page: i
 
 
 async def ishop_buy_prompt(update: Update, context: ContextTypes.DEFAULT_TYPE, item_id: int, back_page: int) -> None:
-    txt = await item_buy_confirm_text(item_id)
-    kb = item_buy_confirm_kb(item_id, back_page)
+    txt = await item_buy_confirm_text(int(item_id))
+    kb = item_buy_confirm_kb(int(item_id), int(back_page))
     await _edit_or_reply(update, txt, kb)
 
 
@@ -511,7 +573,7 @@ async def ishop_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE, item
     await _ensure_user(user_id)
     await _touch_economy(user_id)
 
-    res = await buy_item(user_id, item_id, qty=1)
+    res = await buy_item(user_id, int(item_id), qty=1)
     if not res.ok:
         msg = "Error."
         if res.reason == "no_mp":
@@ -577,8 +639,8 @@ async def eq_menu(update: Update, context: ContextTypes.DEFAULT_TYPE, user_cat_i
     await _ensure_user(user_id)
     await _touch_economy(user_id)
 
-    txt = await equipped_summary_text(user_id, user_cat_id)
-    await _edit_or_reply(update, txt, equip_menu_kb(user_cat_id))
+    txt = await equipped_summary_text(user_id, int(user_cat_id))
+    await _edit_or_reply(update, txt, equip_menu_kb(int(user_cat_id)))
 
 
 async def eq_list(update: Update, context: ContextTypes.DEFAULT_TYPE, user_cat_id: int, page: int) -> None:
@@ -588,9 +650,9 @@ async def eq_list(update: Update, context: ContextTypes.DEFAULT_TYPE, user_cat_i
     await _ensure_user(user_id)
     await _touch_economy(user_id)
 
-    items, has_prev, has_next = await fetch_equipable_items_page(user_id, user_cat_id, page)
-    txt = await equip_list_text(user_cat_id, page)
-    kb = equip_list_kb(user_cat_id, items, page, has_prev, has_next)
+    items, has_prev, has_next = await fetch_equipable_items_page(user_id, int(user_cat_id), int(page))
+    txt = await equip_list_text(int(user_cat_id), int(page))
+    kb = equip_list_kb(int(user_cat_id), items, int(page), has_prev, has_next)
     await _edit_or_reply(update, txt, kb)
 
 
@@ -601,7 +663,7 @@ async def eq_do_equip(update: Update, context: ContextTypes.DEFAULT_TYPE, user_c
     await _ensure_user(user_id)
     await _touch_economy(user_id)
 
-    res = await equip_item(user_id, user_cat_id, item_id)
+    res = await equip_item(user_id, int(user_cat_id), int(item_id))
     if not res.ok:
         msg = "Error."
         if res.reason == "no_item":
@@ -612,10 +674,10 @@ async def eq_do_equip(update: Update, context: ContextTypes.DEFAULT_TYPE, user_c
             msg = "قبلاً مجهز شده."
         elif res.reason == "cat_not_found":
             msg = "گربه یافت نشد."
-        await _edit_or_reply(update, msg, equip_menu_kb(user_cat_id))
+        await _edit_or_reply(update, msg, equip_menu_kb(int(user_cat_id)))
         return
 
-    await eq_menu(update, context, user_cat_id)
+    await eq_menu(update, context, int(user_cat_id))
 
 
 async def eq_do_unequip(update: Update, context: ContextTypes.DEFAULT_TYPE, user_cat_id: int, item_id: int) -> None:
@@ -625,17 +687,17 @@ async def eq_do_unequip(update: Update, context: ContextTypes.DEFAULT_TYPE, user
     await _ensure_user(user_id)
     await _touch_economy(user_id)
 
-    res = await unequip_item(user_id, user_cat_id, item_id)
+    res = await unequip_item(user_id, int(user_cat_id), int(item_id))
     if not res.ok:
         msg = "Error."
         if res.reason == "not_equipped":
             msg = "مجهز نیست."
         elif res.reason == "cat_not_found":
             msg = "گربه یافت نشد."
-        await _edit_or_reply(update, msg, equip_menu_kb(user_cat_id))
+        await _edit_or_reply(update, msg, equip_menu_kb(int(user_cat_id)))
         return
 
-    await eq_menu(update, context, user_cat_id)
+    await eq_menu(update, context, int(user_cat_id))
 
 
 async def eq_cb(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -673,9 +735,9 @@ async def inv_list(update: Update, context: ContextTypes.DEFAULT_TYPE, page: int
     await _ensure_user(user_id)
     await _touch_economy(user_id)
 
-    items, has_prev, has_next = await fetch_inventory_page(user_id, page)
-    txt = await inventory_text(user_id, page)
-    kb = inventory_kb(items, page, has_prev, has_next)
+    items, has_prev, has_next = await fetch_inventory_page(user_id, int(page))
+    txt = await inventory_text(user_id, int(page))
+    kb = inventory_kb(items, int(page), has_prev, has_next)
     await _edit_or_reply(update, txt, kb)
 
 
@@ -686,12 +748,12 @@ async def inv_item(update: Update, context: ContextTypes.DEFAULT_TYPE, item_id: 
     await _ensure_user(user_id)
     await _touch_economy(user_id)
 
-    it = await get_item_basic(item_id)
+    it = await get_item_basic(int(item_id))
     if it is None:
         await _edit_or_reply(update, "Not found.", back_home_keyboard())
         return
 
-    qty = await user_item_qty(user_id, item_id)
+    qty = await user_item_qty(user_id, int(item_id))
     txt = await inventory_item_text(user_id, it["name"], it["type"], qty)
     await _edit_or_reply(update, txt, inventory_item_kb())
 
@@ -723,133 +785,6 @@ async def inv_cb(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         return
 
     await inv_list(update, context, 0)
-
-
-# --- Shelter ---
-async def shelter_view(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    user_id = _user_id_from_update(update)
-    if user_id is None:
-        return
-    await _ensure_user(user_id)
-    await _touch_economy(user_id)
-
-    txt = await shelter_text(user_id)
-    await _edit_or_reply(update, txt, shelter_kb(True))
-
-
-async def shelter_cb(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    if update.callback_query:
-        await update.callback_query.answer()
-
-    if not await _check_join_gate(update, context):
-        return
-
-    user_id = _user_id_from_update(update)
-    if user_id is None:
-        return
-    await _ensure_user(user_id)
-    await _touch_economy(user_id)
-
-    data = update.callback_query.data if update.callback_query else ""
-    if data == "shelter:root":
-        await shelter_view(update, context)
-        return
-    if data == "shelter:up":
-        txt, kb = await shelter_upgrade_and_text(user_id)
-        await _edit_or_reply(update, txt, kb)
-        return
-
-    await shelter_view(update, context)
-
-
-# --- Events ---
-async def events_root(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    txt = await events_root_text()
-    await _edit_or_reply(update, txt, events_root_kb())
-
-
-async def events_list(update: Update, context: ContextTypes.DEFAULT_TYPE, page: int) -> None:
-    items, has_prev, has_next = await fetch_events_page(page)
-    txt = await events_list_text(page)
-    kb = events_list_kb(items, page, has_prev, has_next)
-    await _edit_or_reply(update, txt, kb)
-
-
-async def event_open(update: Update, context: ContextTypes.DEFAULT_TYPE, cat_id: int, back_page: int) -> None:
-    txt = await event_cat_text(cat_id)
-    kb = event_cat_kb(cat_id, back_page)
-    await _edit_or_reply(update, txt, kb)
-
-
-async def events_cb(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    if update.callback_query:
-        await update.callback_query.answer()
-
-    if not await _check_join_gate(update, context):
-        return
-
-    data = update.callback_query.data if update.callback_query else ""
-    parts = data.split(":")
-
-    if data == "ev:root":
-        await events_root(update, context)
-        return
-
-    if data.startswith("ev:list:") and len(parts) == 3:
-        try:
-            page = int(parts[2])
-        except Exception:
-            page = 0
-        await events_list(update, context, page)
-        return
-
-    if data.startswith("ev:open:") and len(parts) == 4:
-        try:
-            cat_id = int(parts[2])
-            back_page = int(parts[3])
-        except Exception:
-            return
-        await event_open(update, context, cat_id, back_page)
-        return
-
-    await events_root(update, context)
-
-
-# --- Settings ---
-async def settings_view(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    user_id = _user_id_from_update(update)
-    if user_id is None:
-        return
-    await _ensure_user(user_id)
-    await _touch_economy(user_id)
-
-    txt, kb = await settings_text(user_id)
-    await _edit_or_reply(update, txt, kb)
-
-
-async def settings_cb(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    if update.callback_query:
-        await update.callback_query.answer()
-
-    if not await _check_join_gate(update, context):
-        return
-
-    user_id = _user_id_from_update(update)
-    if user_id is None:
-        return
-    await _ensure_user(user_id)
-    await _touch_economy(user_id)
-
-    data = update.callback_query.data if update.callback_query else ""
-    parts = data.split(":")
-
-    if data.startswith("set:") and len(parts) == 2:
-        action = parts[1]
-        txt, kb = await settings_apply(user_id, action)
-        await _edit_or_reply(update, txt, kb)
-        return
-
-    await settings_view(update, context)
 
 
 # --- Feed/Play All ---
@@ -940,9 +875,9 @@ async def my_cats_list(update: Update, context: ContextTypes.DEFAULT_TYPE, page:
     await _ensure_user(user_id)
     await _touch_economy(user_id)
 
-    rows, has_prev, has_next = await fetch_user_cats_page(user_id, page)
-    text = await render_user_cats_page_text(user_id, page)
-    kb = cats_list_keyboard(rows, page, has_prev, has_next)
+    rows, has_prev, has_next = await fetch_user_cats_page(user_id, int(page))
+    text = await render_user_cats_page_text(user_id, int(page))
+    kb = cats_list_keyboard(rows, int(page), has_prev, has_next)
     await _edit_or_reply(update, text, kb)
 
 
@@ -954,12 +889,12 @@ async def my_cat_open(update: Update, context: ContextTypes.DEFAULT_TYPE, user_c
     await _touch_economy(user_id)
 
     if update.effective_chat:
-        media = await fetch_cat_media(user_id, user_cat_id)
+        media = await fetch_cat_media(user_id, int(user_cat_id))
         if media:
             await _send_media(context, update.effective_chat.id, media)
 
-    text = await render_cat_details(user_id, user_cat_id)
-    kb = cat_details_keyboard(user_cat_id)
+    text = await render_cat_details(user_id, int(user_cat_id))
+    kb = cat_details_keyboard(int(user_cat_id))
     await _edit_or_reply(update, text, kb)
 
 
@@ -975,13 +910,13 @@ async def my_cat_feed(update: Update, context: ContextTypes.DEFAULT_TYPE, user_c
     try:
         await db.execute(
             "UPDATE user_cats SET last_feed_at=? WHERE user_id=? AND id=? AND status='active'",
-            (now, user_id, user_cat_id),
+            (int(now), int(user_id), int(user_cat_id)),
         )
         await db.commit()
     finally:
         await db.close()
 
-    await my_cat_open(update, context, user_cat_id)
+    await my_cat_open(update, context, int(user_cat_id))
 
 
 async def my_cat_play(update: Update, context: ContextTypes.DEFAULT_TYPE, user_cat_id: int) -> None:
@@ -996,13 +931,13 @@ async def my_cat_play(update: Update, context: ContextTypes.DEFAULT_TYPE, user_c
     try:
         await db.execute(
             "UPDATE user_cats SET last_play_at=? WHERE user_id=? AND id=? AND status='active'",
-            (now, user_id, user_cat_id),
+            (int(now), int(user_id), int(user_cat_id)),
         )
         await db.commit()
     finally:
         await db.close()
 
-    await my_cat_open(update, context, user_cat_id)
+    await my_cat_open(update, context, int(user_cat_id))
 
 
 async def cats_cb(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -1050,12 +985,151 @@ async def cats_cb(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await my_cats_list(update, context, 0)
 
 
+# --- Settings ---
+async def settings_view(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    user_id = _user_id_from_update(update)
+    if user_id is None:
+        return
+    await _ensure_user(user_id)
+    await _touch_economy(user_id)
+
+    txt = await settings_root_text(user_id)
+    kb = settings_root_kb(await settings_handle(user_id, "noop"))
+    await _edit_or_reply(update, txt, kb)
+
+
+async def settings_cb(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if update.callback_query:
+        await update.callback_query.answer()
+
+    if not await _check_join_gate(update, context):
+        return
+
+    user_id = _user_id_from_update(update)
+    if user_id is None:
+        return
+
+    await _ensure_user(user_id)
+    await _touch_economy(user_id)
+
+    data = update.callback_query.data if update.callback_query else ""
+    if data == "set:root":
+        s = await settings_handle(user_id, "noop")
+    elif data == "set:notify":
+        s = await settings_handle(user_id, "notify")
+    elif data == "set:pub":
+        s = await settings_handle(user_id, "pub")
+    elif data == "set:lang":
+        s = await settings_handle(user_id, "lang")
+    else:
+        s = await settings_handle(user_id, "noop")
+
+    txt = await settings_root_text(user_id)
+    await _edit_or_reply(update, txt, settings_root_kb(s))
+
+
+# --- Shelter ---
+async def shelter_view(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    user_id = _user_id_from_update(update)
+    if user_id is None:
+        return
+    await _ensure_user(user_id)
+    await _touch_economy(user_id)
+
+    txt = await shelter_text(user_id)
+    await _edit_or_reply(update, txt, shelter_kb(True))
+
+
+async def shelter_cb(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if update.callback_query:
+        await update.callback_query.answer()
+
+    if not await _check_join_gate(update, context):
+        return
+
+    user_id = _user_id_from_update(update)
+    if user_id is None:
+        return
+
+    await _ensure_user(user_id)
+    await _touch_economy(user_id)
+
+    data = update.callback_query.data if update.callback_query else ""
+    if data == "shelter:root":
+        await shelter_view(update, context)
+        return
+
+    if data == "shelter:up":
+        txt, kb = await shelter_upgrade_and_text(user_id)
+        await _edit_or_reply(update, txt, kb)
+        return
+
+    await shelter_view(update, context)
+
+
+# --- Events ---
+async def ev_root(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    txt = await events_root_text()
+    await _edit_or_reply(update, txt, events_root_kb())
+
+
+async def ev_list(update: Update, context: ContextTypes.DEFAULT_TYPE, page: int) -> None:
+    items, has_prev, has_next = await fetch_events_page(int(page))
+    txt = await events_list_text(int(page))
+    kb = events_list_kb(items, int(page), has_prev, has_next)
+    await _edit_or_reply(update, txt, kb)
+
+
+async def ev_open(update: Update, context: ContextTypes.DEFAULT_TYPE, cat_id: int, back_page: int) -> None:
+    if update.effective_chat:
+        await _send_catalog_media(context, update.effective_chat.id, int(cat_id))
+    txt = await event_cat_text(int(cat_id))
+    kb = event_cat_kb(int(cat_id), int(back_page))
+    await _edit_or_reply(update, txt, kb)
+
+
+async def ev_cb(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if update.callback_query:
+        await update.callback_query.answer()
+
+    if not await _check_join_gate(update, context):
+        return
+
+    data = update.callback_query.data if update.callback_query else ""
+    parts = data.split(":")
+
+    if data == "ev:root":
+        await ev_root(update, context)
+        return
+
+    if data.startswith("ev:list:") and len(parts) == 3:
+        try:
+            page = int(parts[2])
+        except Exception:
+            page = 0
+        await ev_list(update, context, page)
+        return
+
+    if data.startswith("ev:open:") and len(parts) == 4:
+        try:
+            cat_id = int(parts[2])
+            back_page = int(parts[3])
+        except Exception:
+            return
+        await ev_open(update, context, cat_id, back_page)
+        return
+
+    await ev_root(update, context)
+
+
 # --- Admin ---
 async def admin_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not await _check_join_gate(update, context):
         return
     user_id = _user_id_from_update(update)
-    if user_id != OWNER_ID:
+    if user_id is None:
+        return
+    if not await is_admin(user_id):
         return
     await _edit_or_reply(update, await admin_menu_text(), admin_menu_keyboard())
 
@@ -1068,7 +1142,9 @@ async def admin_cb(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         return
 
     user_id = _user_id_from_update(update)
-    if user_id != OWNER_ID:
+    if user_id is None:
+        return
+    if not await is_admin(user_id):
         return
 
     data = update.callback_query.data if update.callback_query else ""
@@ -1161,6 +1237,108 @@ async def admin_cb(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         await _edit_or_reply(update, txt, kb)
         return
 
+    if data == "admin:setgroup":
+        txt, kb = await admin_setgroup_start(user_id, context)
+        await _edit_or_reply(update, txt, kb)
+        return
+
+    if data == "admin:setgroup:confirm":
+        txt, kb = await admin_setgroup_confirm(user_id, context)
+        await _edit_or_reply(update, txt, kb)
+        return
+
+    if data == "admin:setgroup:cancel":
+        txt, kb = await admin_setgroup_cancel(context)
+        await _edit_or_reply(update, txt, kb)
+        return
+
+    if data == "admin:setcfg":
+        txt, kb = await admin_setcfg_start(user_id, context)
+        await _edit_or_reply(update, txt, kb)
+        return
+
+    if data == "admin:setcfg:confirm":
+        txt, kb = await admin_setcfg_confirm(user_id, context)
+        await _edit_or_reply(update, txt, kb)
+        return
+
+    if data == "admin:setcfg:cancel":
+        txt, kb = await admin_setcfg_cancel(context)
+        await _edit_or_reply(update, txt, kb)
+        return
+
+    if data == "admin:grant":
+        txt, kb = await admin_grant_start(user_id, context)
+        await _edit_or_reply(update, txt, kb)
+        return
+
+    if data == "admin:grant:mp":
+        txt, kb = await admin_grant_pick("mp", context)
+        await _edit_or_reply(update, txt, kb)
+        return
+
+    if data == "admin:grant:ess":
+        txt, kb = await admin_grant_pick("ess", context)
+        await _edit_or_reply(update, txt, kb)
+        return
+
+    if data == "admin:grant:item":
+        txt, kb = await admin_grant_pick("item", context)
+        await _edit_or_reply(update, txt, kb)
+        return
+
+    if data == "admin:grant:cat":
+        txt, kb = await admin_grant_pick("cat", context)
+        await _edit_or_reply(update, txt, kb)
+        return
+
+    if data == "admin:grant:confirm":
+        txt, kb = await admin_grant_confirm(user_id, context)
+        await _edit_or_reply(update, txt, kb)
+        return
+
+    if data == "admin:grant:cancel":
+        txt, kb = await admin_grant_cancel(context)
+        await _edit_or_reply(update, txt, kb)
+        return
+
+    if data == "admin:ban":
+        txt, kb = await admin_ban_start(user_id, context)
+        await _edit_or_reply(update, txt, kb)
+        return
+
+    if data == "admin:ban:do":
+        txt, kb = await admin_ban_pick("do", context)
+        await _edit_or_reply(update, txt, kb)
+        return
+
+    if data == "admin:ban:undo":
+        txt, kb = await admin_ban_pick("undo", context)
+        await _edit_or_reply(update, txt, kb)
+        return
+
+    if data == "admin:ban:confirm":
+        txt, kb = await admin_ban_confirm(user_id, context)
+        await _edit_or_reply(update, txt, kb)
+        return
+
+    if data == "admin:ban:cancel":
+        txt, kb = await admin_ban_cancel(context)
+        await _edit_or_reply(update, txt, kb)
+        return
+
+    if data.startswith("admin:logs:"):
+        parts = data.split(":")
+        page = 0
+        if len(parts) == 3:
+            try:
+                page = int(parts[2])
+            except Exception:
+                page = 0
+        txt, kb = await admin_logs_page(page)
+        await _edit_or_reply(update, txt, kb)
+        return
+
     await _edit_or_reply(update, await admin_menu_text(), admin_menu_keyboard())
 
 
@@ -1171,12 +1349,37 @@ async def admin_msg_router(update: Update, context: ContextTypes.DEFAULT_TYPE) -
 
     if update.effective_chat and update.effective_chat.type != "private":
         return
-    if user_id != OWNER_ID:
+
+    if not await is_admin(user_id):
         return
 
     out = await admin_addcat_handle_message(user_id, update, context)
     if out and update.message:
         await update.message.reply_text(out)
+        return
+
+    out_sg = await admin_setgroup_handle_message(user_id, update, context)
+    if out_sg and update.message:
+        txt, kb = out_sg
+        await update.message.reply_text(txt, reply_markup=kb)
+        return
+
+    out_sc = await admin_setcfg_handle_message(user_id, update, context)
+    if out_sc and update.message:
+        txt, kb = out_sc
+        await update.message.reply_text(txt, reply_markup=kb)
+        return
+
+    out_gr = await admin_grant_handle_message(user_id, update, context)
+    if out_gr and update.message:
+        txt, kb = out_gr
+        await update.message.reply_text(txt, reply_markup=kb)
+        return
+
+    out_b = await admin_ban_handle_message(user_id, update, context)
+    if out_b and update.message:
+        txt, kb = out_b
+        await update.message.reply_text(txt, reply_markup=kb)
         return
 
     out2 = await admin_additem_handle_message(user_id, update, context)
@@ -1232,18 +1435,6 @@ async def nav_cb(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         await inv_list(update, context, 0)
         return
 
-    if data == "nav:shelter":
-        await shelter_view(update, context)
-        return
-
-    if data == "nav:events":
-        await events_root(update, context)
-        return
-
-    if data == "nav:settings":
-        await settings_view(update, context)
-        return
-
     if data == "nav:feedall":
         await feed_all_cb(update, context)
         return
@@ -1252,8 +1443,20 @@ async def nav_cb(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         await play_all_cb(update, context)
         return
 
+    if data == "nav:settings":
+        await settings_view(update, context)
+        return
+
+    if data == "nav:shelter":
+        await shelter_view(update, context)
+        return
+
+    if data == "nav:events":
+        await ev_root(update, context)
+        return
+
     if data == "nav:admin":
-        if user_id == OWNER_ID:
+        if await is_admin(user_id):
             await _edit_or_reply(update, await admin_menu_text(), admin_menu_keyboard())
         return
 
@@ -1299,11 +1502,15 @@ def main() -> None:
     app.add_handler(CallbackQueryHandler(eq_cb, pattern=r"^eq:"))
     app.add_handler(CallbackQueryHandler(inv_cb, pattern=r"^inv:"))
     app.add_handler(CallbackQueryHandler(cats_cb, pattern=r"^cat:"))
-    app.add_handler(CallbackQueryHandler(admin_cb, pattern=r"^admin:"))
-    app.add_handler(CallbackQueryHandler(shelter_cb, pattern=r"^shelter:"))
-    app.add_handler(CallbackQueryHandler(events_cb, pattern=r"^ev:"))
+
     app.add_handler(CallbackQueryHandler(settings_cb, pattern=r"^set:"))
+    app.add_handler(CallbackQueryHandler(shelter_cb, pattern=r"^shelter:"))
+    app.add_handler(CallbackQueryHandler(ev_cb, pattern=r"^ev:"))
+
+    app.add_handler(CallbackQueryHandler(admin_cb, pattern=r"^admin:"))
     app.add_handler(CallbackQueryHandler(nav_cb, pattern=r"^nav:"))
+
+    app.add_handler(CallbackQueryHandler(nav_cb))
 
     app.run_polling(allowed_updates=Update.ALL_TYPES)
 
