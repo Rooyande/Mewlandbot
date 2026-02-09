@@ -77,7 +77,7 @@ from item_shop_ui import (
     item_buy_confirm_text,
     item_buy_confirm_kb,
 )
-from item_shop import buy_item, get_item_for_sale
+from item_shop import buy_item
 
 logging.basicConfig(
     level=logging.INFO,
@@ -308,8 +308,6 @@ async def shop_prem(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await _edit_or_reply(update, text, _shop_keyboard())
 
 
-# --- Direct Shop Flow ---
-
 async def dshop_root(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     txt = await direct_shop_root_text()
     await _edit_or_reply(update, txt, direct_shop_root_kb())
@@ -442,8 +440,6 @@ async def dshop_cb(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await dshop_root(update, context)
 
 
-# --- Item Shop Flow ---
-
 async def ishop_root(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     txt = await item_shop_root_text()
     await _edit_or_reply(update, txt, item_shop_root_kb())
@@ -462,13 +458,13 @@ async def ishop_list(update: Update, context: ContextTypes.DEFAULT_TYPE, page: i
     await _edit_or_reply(update, txt, kb)
 
 
-async def ishop_buy_prompt(update: Update, context: ContextTypes.DEFAULT_TYPE, item_id: int) -> None:
+async def ishop_buy_prompt(update: Update, context: ContextTypes.DEFAULT_TYPE, item_id: int, back_page: int) -> None:
     txt = await item_buy_confirm_text(item_id)
-    kb = item_buy_confirm_kb(item_id)
+    kb = item_buy_confirm_kb(item_id, back_page)
     await _edit_or_reply(update, txt, kb)
 
 
-async def ishop_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE, item_id: int) -> None:
+async def ishop_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE, item_id: int, back_page: int) -> None:
     user_id = _user_id_from_update(update)
     if user_id is None:
         return
@@ -512,26 +508,26 @@ async def ishop_cb(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         await ishop_list(update, context, page)
         return
 
-    if data.startswith("ishop:buy:") and len(parts) == 3:
+    if data.startswith("ishop:buy:") and len(parts) == 4:
         try:
             item_id = int(parts[2])
+            back_page = int(parts[3])
         except Exception:
             return
-        await ishop_buy_prompt(update, context, item_id)
+        await ishop_buy_prompt(update, context, item_id, back_page)
         return
 
-    if data.startswith("ishop:confirm:") and len(parts) == 3:
+    if data.startswith("ishop:confirm:") and len(parts) == 4:
         try:
             item_id = int(parts[2])
+            back_page = int(parts[3])
         except Exception:
             return
-        await ishop_confirm(update, context, item_id)
+        await ishop_confirm(update, context, item_id, back_page)
         return
 
     await ishop_root(update, context)
 
-
-# --- Equip Flow ---
 
 async def eq_menu(update: Update, context: ContextTypes.DEFAULT_TYPE, user_cat_id: int) -> None:
     user_id = _user_id_from_update(update)
@@ -628,8 +624,6 @@ async def eq_cb(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         return
 
 
-# --- Inventory Flow ---
-
 async def inv_list(update: Update, context: ContextTypes.DEFAULT_TYPE, page: int = 0) -> None:
     user_id = _user_id_from_update(update)
     if user_id is None:
@@ -688,8 +682,6 @@ async def inv_cb(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
     await inv_list(update, context, 0)
 
-
-# --- Meow / Cats / Admin / Nav ---
 
 async def meow_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not await _check_join_gate(update, context):
