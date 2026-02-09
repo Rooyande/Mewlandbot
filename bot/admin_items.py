@@ -1,8 +1,8 @@
 import json
 from dataclasses import dataclass
-from typing import Optional, Dict, Any
+from typing import Optional
 
-from telegram import Update
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes
 
 from db import open_db
@@ -63,37 +63,46 @@ def _next_field(d: AddItemDraft) -> str:
     return "done"
 
 
-async def admin_additem_start(admin_id: int, context: ContextTypes.DEFAULT_TYPE) -> str:
+def additem_confirm_kb() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        [
+            [InlineKeyboardButton("Confirm", callback_data="admin:additem:confirm")],
+            [InlineKeyboardButton("Cancel", callback_data="admin:additem:cancel")],
+        ]
+    )
+
+
+async def admin_additem_start(admin_id: int, context: ContextTypes.DEFAULT_TYPE) -> tuple[str, InlineKeyboardMarkup | None]:
     d = AddItemDraft()
     _draft_set(context, d)
-    return "Add Item\n\nName را ارسال کنید."
+    return "Add Item\n\nName را ارسال کنید.", None
 
 
-async def admin_additem_cancel(context: ContextTypes.DEFAULT_TYPE) -> str:
+async def admin_additem_cancel(context: ContextTypes.DEFAULT_TYPE) -> tuple[str, InlineKeyboardMarkup | None]:
     _draft_clear(context)
-    return "لغو شد."
+    return "لغو شد.", None
 
 
-async def admin_additem_preview(context: ContextTypes.DEFAULT_TYPE) -> str:
+async def admin_additem_preview(context: ContextTypes.DEFAULT_TYPE) -> tuple[str, InlineKeyboardMarkup]:
     d = _draft_get(context)
-    return (
+    txt = (
         "Add Item Preview\n\n"
         f"Name: {d.name}\n"
         f"Type: {d.type}\n"
         f"Tradable: {d.tradable}\n"
         f"Active: {d.active}\n\n"
         f"Effect JSON:\n{d.effect_json}\n\n"
-        f"Durability JSON:\n{d.durability_rules_json}\n\n"
-        "Confirm / Cancel"
+        f"Durability JSON:\n{d.durability_rules_json}\n"
     )
+    return txt, additem_confirm_kb()
 
 
-async def admin_additem_handle_message(admin_id: int, update: Update, context: ContextTypes.DEFAULT_TYPE) -> Optional[str]:
+async def admin_additem_handle_message(admin_id: int, update: Update, context: ContextTypes.DEFAULT_TYPE) -> tuple[str, InlineKeyboardMarkup | None] | None:
     if not _is_running(context):
         return None
 
     if not update.message or update.message.text is None:
-        return "فقط متن ارسال کنید."
+        return "فقط متن ارسال کنید.", None
 
     text = update.message.text.strip()
     d = _draft_get(context)
@@ -101,17 +110,17 @@ async def admin_additem_handle_message(admin_id: int, update: Update, context: C
 
     if nf == "name":
         if len(text) < 2:
-            return "Name نامعتبر است. دوباره ارسال کنید."
+            return "Name نامعتبر است. دوباره ارسال کنید.", None
         d.name = text
         _draft_set(context, d)
-        return "Type را ارسال کنید. (مثلاً utility یا cosmetic)"
+        return "Type را ارسال کنید. (مثلاً utility یا cosmetic)", None
 
     if nf == "type":
         if len(text) < 2:
-            return "Type نامعتبر است. دوباره ارسال کنید."
+            return "Type نامعتبر است. دوباره ارسال کنید.", None
         d.type = text
         _draft_set(context, d)
-        return "Effect JSON را ارسال کنید. (یا 'none')"
+        return "Effect JSON را ارسال کنید. (یا 'none')", None
 
     if nf == "effect_json":
         if text.lower() == "none":
@@ -121,9 +130,9 @@ async def admin_additem_handle_message(admin_id: int, update: Update, context: C
                 json.loads(text)
                 d.effect_json = text
             except Exception:
-                return "Effect JSON نامعتبر است. JSON صحیح یا 'none' ارسال کنید."
+                return "Effect JSON نامعتبر است. JSON صحیح یا 'none' ارسال کنید.", None
         _draft_set(context, d)
-        return "Durability Rules JSON را ارسال کنید. (یا 'none')"
+        return "Durability Rules JSON را ارسال کنید. (یا 'none')", None
 
     if nf == "durability_rules_json":
         if text.lower() == "none":
@@ -133,20 +142,20 @@ async def admin_additem_handle_message(admin_id: int, update: Update, context: C
                 json.loads(text)
                 d.durability_rules_json = text
             except Exception:
-                return "Durability JSON نامعتبر است. JSON صحیح یا 'none' ارسال کنید."
+                return "Durability JSON نامعتبر است. JSON صحیح یا 'none' ارسال کنید.", None
         _draft_set(context, d)
-        return "Tradable را ارسال کنید. (0 یا 1)"
+        return "Tradable را ارسال کنید. (0 یا 1)", None
 
     if nf == "tradable":
         if text not in ("0", "1"):
-            return "Tradable فقط 0 یا 1."
+            return "Tradable فقط 0 یا 1.", None
         d.tradable = int(text)
         _draft_set(context, d)
-        return "Active را ارسال کنید. (0 یا 1)"
+        return "Active را ارسال کنید. (0 یا 1)", None
 
     if nf == "active":
         if text not in ("0", "1"):
-            return "Active فقط 0 یا 1."
+            return "Active فقط 0 یا 1.", None
         d.active = int(text)
         _draft_set(context, d)
         return await admin_additem_preview(context)
@@ -154,10 +163,10 @@ async def admin_additem_handle_message(admin_id: int, update: Update, context: C
     return await admin_additem_preview(context)
 
 
-async def admin_additem_confirm(admin_id: int, context: ContextTypes.DEFAULT_TYPE) -> str:
+async def admin_additem_confirm(admin_id: int, context: ContextTypes.DEFAULT_TYPE) -> tuple[str, InlineKeyboardMarkup | None]:
     d = _draft_get(context)
     if _next_field(d) != "done":
-        return "Wizard کامل نیست."
+        return "Wizard کامل نیست.", None
 
     db = await open_db()
     try:
@@ -197,6 +206,6 @@ async def admin_additem_confirm(admin_id: int, context: ContextTypes.DEFAULT_TYP
 
         await db.commit()
         _draft_clear(context)
-        return f"Item added.\n\nitem_id: {int(item_id)}"
+        return f"Item added.\n\nitem_id: {int(item_id)}", None
     finally:
         await db.close()
