@@ -99,6 +99,18 @@ from item_shop_ui import (
 )
 from item_shop import buy_item
 
+from shelter_ui import shelter_text, shelter_kb, shelter_upgrade_and_text
+from events_ui import (
+    events_root_text,
+    events_root_kb,
+    fetch_events_page,
+    events_list_text,
+    events_list_kb,
+    event_cat_text,
+    event_cat_kb,
+)
+from settings_ui import settings_text, settings_apply
+
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s %(levelname)s %(name)s: %(message)s",
@@ -280,6 +292,8 @@ async def shop_std(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             text += f"\nDuplicate → Level Up! (Lvl {out.get('level')})"
         else:
             text += f"\nDuplicate. (Lvl {out.get('level')})"
+        if out.get("type") == "dup_max" and "essence" in out:
+            text += f"\nEssence: +{out.get('essence')}"
 
     await _edit_or_reply(update, text, _shop_keyboard())
 
@@ -324,6 +338,8 @@ async def shop_prem(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             text += f"\nDuplicate → Level Up! (Lvl {out.get('level')})"
         else:
             text += f"\nDuplicate. (Lvl {out.get('level')})"
+        if out.get("type") == "dup_max" and "essence" in out:
+            text += f"\nEssence: +{out.get('essence')}"
 
     await _edit_or_reply(update, text, _shop_keyboard())
 
@@ -411,6 +427,8 @@ async def dshop_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE, cat_
             txt += f"\nDuplicate → Level Up! (Lvl {out.get('level')})"
         else:
             txt += f"\nDuplicate. (Lvl {out.get('level')})"
+        if out.get("type") == "dup_max" and "essence" in out:
+            txt += f"\nEssence: +{out.get('essence')}"
 
     await _edit_or_reply(update, txt, direct_shop_root_kb())
 
@@ -705,6 +723,133 @@ async def inv_cb(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         return
 
     await inv_list(update, context, 0)
+
+
+# --- Shelter ---
+async def shelter_view(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    user_id = _user_id_from_update(update)
+    if user_id is None:
+        return
+    await _ensure_user(user_id)
+    await _touch_economy(user_id)
+
+    txt = await shelter_text(user_id)
+    await _edit_or_reply(update, txt, shelter_kb(True))
+
+
+async def shelter_cb(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if update.callback_query:
+        await update.callback_query.answer()
+
+    if not await _check_join_gate(update, context):
+        return
+
+    user_id = _user_id_from_update(update)
+    if user_id is None:
+        return
+    await _ensure_user(user_id)
+    await _touch_economy(user_id)
+
+    data = update.callback_query.data if update.callback_query else ""
+    if data == "shelter:root":
+        await shelter_view(update, context)
+        return
+    if data == "shelter:up":
+        txt, kb = await shelter_upgrade_and_text(user_id)
+        await _edit_or_reply(update, txt, kb)
+        return
+
+    await shelter_view(update, context)
+
+
+# --- Events ---
+async def events_root(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    txt = await events_root_text()
+    await _edit_or_reply(update, txt, events_root_kb())
+
+
+async def events_list(update: Update, context: ContextTypes.DEFAULT_TYPE, page: int) -> None:
+    items, has_prev, has_next = await fetch_events_page(page)
+    txt = await events_list_text(page)
+    kb = events_list_kb(items, page, has_prev, has_next)
+    await _edit_or_reply(update, txt, kb)
+
+
+async def event_open(update: Update, context: ContextTypes.DEFAULT_TYPE, cat_id: int, back_page: int) -> None:
+    txt = await event_cat_text(cat_id)
+    kb = event_cat_kb(cat_id, back_page)
+    await _edit_or_reply(update, txt, kb)
+
+
+async def events_cb(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if update.callback_query:
+        await update.callback_query.answer()
+
+    if not await _check_join_gate(update, context):
+        return
+
+    data = update.callback_query.data if update.callback_query else ""
+    parts = data.split(":")
+
+    if data == "ev:root":
+        await events_root(update, context)
+        return
+
+    if data.startswith("ev:list:") and len(parts) == 3:
+        try:
+            page = int(parts[2])
+        except Exception:
+            page = 0
+        await events_list(update, context, page)
+        return
+
+    if data.startswith("ev:open:") and len(parts) == 4:
+        try:
+            cat_id = int(parts[2])
+            back_page = int(parts[3])
+        except Exception:
+            return
+        await event_open(update, context, cat_id, back_page)
+        return
+
+    await events_root(update, context)
+
+
+# --- Settings ---
+async def settings_view(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    user_id = _user_id_from_update(update)
+    if user_id is None:
+        return
+    await _ensure_user(user_id)
+    await _touch_economy(user_id)
+
+    txt, kb = await settings_text(user_id)
+    await _edit_or_reply(update, txt, kb)
+
+
+async def settings_cb(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if update.callback_query:
+        await update.callback_query.answer()
+
+    if not await _check_join_gate(update, context):
+        return
+
+    user_id = _user_id_from_update(update)
+    if user_id is None:
+        return
+    await _ensure_user(user_id)
+    await _touch_economy(user_id)
+
+    data = update.callback_query.data if update.callback_query else ""
+    parts = data.split(":")
+
+    if data.startswith("set:") and len(parts) == 2:
+        action = parts[1]
+        txt, kb = await settings_apply(user_id, action)
+        await _edit_or_reply(update, txt, kb)
+        return
+
+    await settings_view(update, context)
 
 
 # --- Feed/Play All ---
@@ -1087,6 +1232,18 @@ async def nav_cb(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         await inv_list(update, context, 0)
         return
 
+    if data == "nav:shelter":
+        await shelter_view(update, context)
+        return
+
+    if data == "nav:events":
+        await events_root(update, context)
+        return
+
+    if data == "nav:settings":
+        await settings_view(update, context)
+        return
+
     if data == "nav:feedall":
         await feed_all_cb(update, context)
         return
@@ -1143,9 +1300,10 @@ def main() -> None:
     app.add_handler(CallbackQueryHandler(inv_cb, pattern=r"^inv:"))
     app.add_handler(CallbackQueryHandler(cats_cb, pattern=r"^cat:"))
     app.add_handler(CallbackQueryHandler(admin_cb, pattern=r"^admin:"))
+    app.add_handler(CallbackQueryHandler(shelter_cb, pattern=r"^shelter:"))
+    app.add_handler(CallbackQueryHandler(events_cb, pattern=r"^ev:"))
+    app.add_handler(CallbackQueryHandler(settings_cb, pattern=r"^set:"))
     app.add_handler(CallbackQueryHandler(nav_cb, pattern=r"^nav:"))
-
-    app.add_handler(CallbackQueryHandler(nav_cb))
 
     app.run_polling(allowed_updates=Update.ALL_TYPES)
 
