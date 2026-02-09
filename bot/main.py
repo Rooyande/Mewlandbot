@@ -1103,35 +1103,6 @@ async def nav_cb(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await _edit_or_reply(update, "در حال توسعه.", back_home_keyboard())
 
 
-async def inv_cb(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    if update.callback_query:
-        await update.callback_query.answer()
-
-    if not await _check_join_gate(update, context):
-        return
-
-    data = update.callback_query.data if update.callback_query else ""
-    parts = data.split(":")
-
-    if data.startswith("inv:list:") and len(parts) == 3:
-        try:
-            page = int(parts[2])
-        except Exception:
-            page = 0
-        await inv_list(update, context, page)
-        return
-
-    if data.startswith("inv:item:") and len(parts) == 3:
-        try:
-            item_id = int(parts[2])
-        except Exception:
-            return
-        await inv_item(update, context, item_id)
-        return
-
-    await inv_list(update, context, 0)
-
-
 async def shop_cb(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if update.callback_query:
         await update.callback_query.answer()
