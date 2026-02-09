@@ -1,5 +1,5 @@
 import time
-from typing import List, Tuple
+from typing import List, Tuple, Optional, Dict, Any
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 
@@ -99,6 +99,30 @@ async def render_user_cats_page_text(user_id: int, page: int) -> str:
     return f"My Cats\n\nPage: {page + 1}"
 
 
+async def fetch_cat_media(user_id: int, user_cat_id: int) -> Optional[Dict[str, str]]:
+    db = await open_db()
+    try:
+        cur = await db.execute(
+            """
+            SELECT cc.media_type, cc.media_file_id
+            FROM user_cats uc
+            JOIN cats_catalog cc ON cc.cat_id = uc.cat_id
+            WHERE uc.user_id=? AND uc.id=?
+            """,
+            (user_id, user_cat_id),
+        )
+        r = await cur.fetchone()
+        if r is None:
+            return None
+        mt = str(r["media_type"] or "").strip().lower()
+        mf = str(r["media_file_id"] or "").strip()
+        if not mt or not mf:
+            return None
+        return {"media_type": mt, "media_file_id": mf}
+    finally:
+        await db.close()
+
+
 async def render_cat_details(user_id: int, user_cat_id: int) -> str:
     now = int(time.time())
     db = await open_db()
@@ -116,9 +140,7 @@ async def render_cat_details(user_id: int, user_cat_id: int) -> str:
               cc.name,
               cc.description,
               cc.rarity,
-              cc.base_passive_rate,
-              cc.media_type,
-              cc.media_file_id
+              cc.base_passive_rate
             FROM user_cats uc
             JOIN cats_catalog cc ON cc.cat_id = uc.cat_id
             WHERE uc.user_id=? AND uc.id=?
