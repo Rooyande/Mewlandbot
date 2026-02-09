@@ -21,6 +21,13 @@ from ui import home_keyboard, back_home_keyboard, render_home_text
 from economy import meow_try
 from passive import apply_passive
 from cats import open_standard_box, open_premium_box
+from cats_ui import (
+    fetch_user_cats_page,
+    cats_list_keyboard,
+    render_user_cats_page_text,
+    render_cat_details,
+    cat_details_keyboard,
+)
 
 logging.basicConfig(
     level=logging.INFO,
@@ -261,6 +268,122 @@ async def meow_cb(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await show_home(update, context)
 
 
+async def my_cats_list(update: Update, context: ContextTypes.DEFAULT_TYPE, page: int = 0) -> None:
+    user_id = _user_id_from_update(update)
+    if user_id is None:
+        return
+    await _ensure_user(user_id)
+    await _touch_passive(user_id)
+
+    rows, has_prev, has_next = await fetch_user_cats_page(user_id, page)
+    text = await render_user_cats_page_text(user_id, page)
+    kb = cats_list_keyboard(rows, page, has_prev, has_next)
+    await _edit_or_reply(update, text, kb)
+
+
+async def my_cat_open(update: Update, context: ContextTypes.DEFAULT_TYPE, user_cat_id: int) -> None:
+    user_id = _user_id_from_update(update)
+    if user_id is None:
+        return
+    await _ensure_user(user_id)
+    await _touch_passive(user_id)
+
+    text = await render_cat_details(user_id, user_cat_id)
+    kb = cat_details_keyboard(user_cat_id)
+    await _edit_or_reply(update, text, kb)
+
+
+async def my_cat_feed(update: Update, context: ContextTypes.DEFAULT_TYPE, user_cat_id: int) -> None:
+    user_id = _user_id_from_update(update)
+    if user_id is None:
+        return
+    await _ensure_user(user_id)
+    await _touch_passive(user_id)
+
+    now = int(time.time())
+    db = await open_db()
+    try:
+        await db.execute(
+            "UPDATE user_cats SET last_feed_at=? WHERE user_id=? AND id=?",
+            (now, user_id, user_cat_id),
+        )
+        await db.commit()
+    finally:
+        await db.close()
+
+    await my_cat_open(update, context, user_cat_id)
+
+
+async def my_cat_play(update: Update, context: ContextTypes.DEFAULT_TYPE, user_cat_id: int) -> None:
+    user_id = _user_id_from_update(update)
+    if user_id is None:
+        return
+    await _ensure_user(user_id)
+    await _touch_passive(user_id)
+
+    now = int(time.time())
+    db = await open_db()
+    try:
+        await db.execute(
+            "UPDATE user_cats SET last_play_at=? WHERE user_id=? AND id=?",
+            (now, user_id, user_cat_id),
+        )
+        await db.commit()
+    finally:
+        await db.close()
+
+    await my_cat_open(update, context, user_cat_id)
+
+
+async def cats_cb(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if update.callback_query:
+        await update.callback_query.answer()
+
+    if not await _check_join_gate(update, context):
+        return
+
+    data = update.callback_query.data if update.callback_query else ""
+    parts = data.split(":")
+
+    # cat:list:<page>
+    if data.startswith("cat:list:") and len(parts) == 3:
+        try:
+            page = int(parts[2])
+        except Exception:
+            page = 0
+        await my_cats_list(update, context, page)
+        return
+
+    # cat:open:<id>
+    if data.startswith("cat:open:") and len(parts) == 3:
+        try:
+            uc_id = int(parts[2])
+        except Exception:
+            return
+        await my_cat_open(update, context, uc_id)
+        return
+
+    # cat:feed:<id>
+    if data.startswith("cat:feed:") and len(parts) == 3:
+        try:
+            uc_id = int(parts[2])
+        except Exception:
+            return
+        await my_cat_feed(update, context, uc_id)
+        return
+
+    # cat:play:<id>
+    if data.startswith("cat:play:") and len(parts) == 3:
+        try:
+            uc_id = int(parts[2])
+        except Exception:
+            return
+        await my_cat_play(update, context, uc_id)
+        return
+
+    await my_cats_list(update, context, 0)
+
+
 async def nav_cb(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if update.callback_query:
         await update.callback_query.answer()
@@ -284,6 +407,10 @@ async def nav_cb(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
     if data == "nav:shop":
         await shop_view(update, context)
+        return
+
+    if data == "nav:cats":
+        await my_cats_list(update, context, 0)
         return
 
     await _edit_or_reply(update, "در حال توسعه.", back_home_keyboard())
@@ -320,6 +447,7 @@ def main() -> None:
     app.add_handler(CallbackQueryHandler(meow_cb, pattern=r"^act:meow$"))
 
     app.add_handler(CallbackQueryHandler(shop_cb, pattern=r"^shop:"))
+    app.add_handler(CallbackQueryHandler(cats_cb, pattern=r"^cat:"))
     app.add_handler(CallbackQueryHandler(nav_cb, pattern=r"^nav:"))
 
     app.add_handler(CallbackQueryHandler(nav_cb))
