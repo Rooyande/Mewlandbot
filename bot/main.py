@@ -138,7 +138,7 @@ async def show_home(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await _touch_economy(user_id)
 
     text = await render_home_text(user_id)
-    await _edit_or_reply(update, text, home_keyboard())
+    await _edit_or_reply(update, text, home_keyboard(user_id))
 
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -273,9 +273,9 @@ async def meow_cb(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         q = update.callback_query
         if q and q.message:
             if res.reason == "cooldown":
-                await q.message.edit_text(f"Cooldown: {res.wait_sec}s", reply_markup=home_keyboard())
+                await q.message.edit_text(f"Cooldown: {res.wait_sec}s", reply_markup=home_keyboard(user_id))
             else:
-                await q.message.edit_text("Daily limit reached.", reply_markup=home_keyboard())
+                await q.message.edit_text("Daily limit reached.", reply_markup=home_keyboard(user_id))
         return
 
     await show_home(update, context)
@@ -466,14 +466,13 @@ async def admin_msg_router(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     if user_id is None:
         return
 
-    # فقط در PV و فقط برای owner
     if update.effective_chat and update.effective_chat.type != "private":
         return
     if user_id != OWNER_ID:
         return
 
     out = await admin_addcat_handle_message(user_id, update, context)
-    if out:
+    if out and update.message:
         await update.message.reply_text(out)
 
 
