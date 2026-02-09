@@ -2,11 +2,7 @@ import asyncio
 import logging
 import time
 
-from telegram import (
-    Update,
-    InlineKeyboardButton,
-    InlineKeyboardMarkup,
-)
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.error import TelegramError
 from telegram.ext import (
     ApplicationBuilder,
@@ -22,6 +18,7 @@ from config import (
 )
 from db import init_db, open_db
 from ui import home_keyboard, back_home_keyboard, render_home_text
+from economy import meow_try
 
 logging.basicConfig(
     level=logging.INFO,
@@ -130,6 +127,52 @@ async def verify_cb(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await show_home(update, context)
 
 
+async def meow_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not await _check_join_gate(update, context):
+        return
+
+    user_id = _user_id_from_update(update)
+    if user_id is None:
+        return
+    await _ensure_user(user_id)
+
+    res = await meow_try(user_id)
+    if not res.ok:
+        if update.message:
+            if res.reason == "cooldown":
+                await update.message.reply_text(f"Cooldown: {res.wait_sec}s")
+            else:
+                await update.message.reply_text("Daily limit reached.")
+        return
+
+    await show_home(update, context)
+
+
+async def meow_cb(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if update.callback_query:
+        await update.callback_query.answer()
+
+    if not await _check_join_gate(update, context):
+        return
+
+    user_id = _user_id_from_update(update)
+    if user_id is None:
+        return
+    await _ensure_user(user_id)
+
+    res = await meow_try(user_id)
+    if not res.ok:
+        q = update.callback_query
+        if q and q.message:
+            if res.reason == "cooldown":
+                await q.message.edit_text(f"Cooldown: {res.wait_sec}s", reply_markup=home_keyboard())
+            else:
+                await q.message.edit_text("Daily limit reached.", reply_markup=home_keyboard())
+        return
+
+    await show_home(update, context)
+
+
 async def nav_cb(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if update.callback_query:
         await update.callback_query.answer()
@@ -139,12 +182,15 @@ async def nav_cb(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
     q = update.callback_query
     data = "" if q is None else (q.data or "")
+
     if data == "nav:home":
         await show_home(update, context)
         return
 
     if q and q.message:
-        await _ensure_user(_user_id_from_update(update) or 0)
+        user_id = _user_id_from_update(update)
+        if user_id is not None:
+            await _ensure_user(user_id)
         await q.message.edit_text("در حال توسعه.", reply_markup=back_home_keyboard())
 
 
@@ -157,7 +203,10 @@ def main() -> None:
     app = ApplicationBuilder().token(BOT_TOKEN).build()
 
     app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler("meow", meow_cmd))
+
     app.add_handler(CallbackQueryHandler(verify_cb, pattern=r"^verify$"))
+    app.add_handler(CallbackQueryHandler(meow_cb, pattern=r"^act:meow$"))
     app.add_handler(CallbackQueryHandler(nav_cb, pattern=r"^nav:"))
     app.add_handler(CallbackQueryHandler(nav_cb))
 
