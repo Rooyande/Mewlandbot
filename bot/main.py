@@ -7,14 +7,17 @@ from telegram.error import TelegramError
 from telegram.ext import (
     ApplicationBuilder,
     CommandHandler,
+    MessageHandler,
     CallbackQueryHandler,
     ContextTypes,
+    filters,
 )
 
 from config import (
     BOT_TOKEN,
     REQUIRED_GROUP_CHAT_ID,
     REQUIRED_GROUP_INVITE_LINK,
+    OWNER_ID,
 )
 from db import init_db, open_db
 from ui import home_keyboard, back_home_keyboard, render_home_text
@@ -29,6 +32,14 @@ from cats_ui import (
     cat_details_keyboard,
 )
 from feedplay import apply_survival, feed_all, play_all
+from admin import (
+    admin_menu_keyboard,
+    admin_menu_text,
+    admin_addcat_start,
+    admin_addcat_handle_message,
+    admin_addcat_confirm,
+    admin_addcat_cancel,
+)
 
 logging.basicConfig(
     level=logging.INFO,
@@ -107,7 +118,7 @@ async def _touch_economy(user_id: int) -> None:
     await apply_survival(user_id)
 
 
-async def _edit_or_reply(update: Update, text: str, reply_markup: InlineKeyboardMarkup) -> None:
+async def _edit_or_reply(update: Update, text: str, reply_markup: InlineKeyboardMarkup | None = None) -> None:
     if update.callback_query and update.callback_query.message:
         try:
             await update.callback_query.message.edit_text(text, reply_markup=reply_markup)
@@ -337,34 +348,6 @@ async def my_cat_play(update: Update, context: ContextTypes.DEFAULT_TYPE, user_c
     await my_cat_open(update, context, user_cat_id)
 
 
-async def feed_all_cb(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    if update.callback_query:
-        await update.callback_query.answer()
-    if not await _check_join_gate(update, context):
-        return
-    user_id = _user_id_from_update(update)
-    if user_id is None:
-        return
-    await _ensure_user(user_id)
-    await _touch_economy(user_id)
-    await feed_all(user_id)
-    await show_home(update, context)
-
-
-async def play_all_cb(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    if update.callback_query:
-        await update.callback_query.answer()
-    if not await _check_join_gate(update, context):
-        return
-    user_id = _user_id_from_update(update)
-    if user_id is None:
-        return
-    await _ensure_user(user_id)
-    await _touch_economy(user_id)
-    await play_all(user_id)
-    await show_home(update, context)
-
-
 async def cats_cb(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if update.callback_query:
         await update.callback_query.answer()
@@ -410,6 +393,90 @@ async def cats_cb(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await my_cats_list(update, context, 0)
 
 
+async def feed_all_cb(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if update.callback_query:
+        await update.callback_query.answer()
+    if not await _check_join_gate(update, context):
+        return
+    user_id = _user_id_from_update(update)
+    if user_id is None:
+        return
+    await _ensure_user(user_id)
+    await _touch_economy(user_id)
+    await feed_all(user_id)
+    await show_home(update, context)
+
+
+async def play_all_cb(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if update.callback_query:
+        await update.callback_query.answer()
+    if not await _check_join_gate(update, context):
+        return
+    user_id = _user_id_from_update(update)
+    if user_id is None:
+        return
+    await _ensure_user(user_id)
+    await _touch_economy(user_id)
+    await play_all(user_id)
+    await show_home(update, context)
+
+
+async def admin_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not await _check_join_gate(update, context):
+        return
+    user_id = _user_id_from_update(update)
+    if user_id != OWNER_ID:
+        return
+    await _edit_or_reply(update, await admin_menu_text(), admin_menu_keyboard())
+
+
+async def admin_cb(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if update.callback_query:
+        await update.callback_query.answer()
+
+    if not await _check_join_gate(update, context):
+        return
+
+    user_id = _user_id_from_update(update)
+    if user_id != OWNER_ID:
+        return
+
+    data = update.callback_query.data if update.callback_query else ""
+
+    if data == "admin:addcat":
+        txt = await admin_addcat_start(user_id, context)
+        await _edit_or_reply(update, txt)
+        return
+
+    if data == "admin:addcat:confirm":
+        txt = await admin_addcat_confirm(user_id, context)
+        await _edit_or_reply(update, txt, admin_menu_keyboard())
+        return
+
+    if data == "admin:addcat:cancel":
+        txt = await admin_addcat_cancel(context)
+        await _edit_or_reply(update, txt, admin_menu_keyboard())
+        return
+
+    await _edit_or_reply(update, await admin_menu_text(), admin_menu_keyboard())
+
+
+async def admin_msg_router(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    user_id = _user_id_from_update(update)
+    if user_id is None:
+        return
+
+    # فقط در PV و فقط برای owner
+    if update.effective_chat and update.effective_chat.type != "private":
+        return
+    if user_id != OWNER_ID:
+        return
+
+    out = await admin_addcat_handle_message(user_id, update, context)
+    if out:
+        await update.message.reply_text(out)
+
+
 async def nav_cb(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if update.callback_query:
         await update.callback_query.answer()
@@ -447,6 +514,11 @@ async def nav_cb(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         await play_all_cb(update, context)
         return
 
+    if data == "nav:admin":
+        if user_id == OWNER_ID:
+            await _edit_or_reply(update, await admin_menu_text(), admin_menu_keyboard())
+        return
+
     await _edit_or_reply(update, "در حال توسعه.", back_home_keyboard())
 
 
@@ -476,12 +548,16 @@ def main() -> None:
 
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("meow", meow_cmd))
+    app.add_handler(CommandHandler("admin", admin_cmd))
+
+    app.add_handler(MessageHandler(filters.ALL, admin_msg_router))
 
     app.add_handler(CallbackQueryHandler(verify_cb, pattern=r"^verify$"))
     app.add_handler(CallbackQueryHandler(meow_cb, pattern=r"^act:meow$"))
 
     app.add_handler(CallbackQueryHandler(shop_cb, pattern=r"^shop:"))
     app.add_handler(CallbackQueryHandler(cats_cb, pattern=r"^cat:"))
+    app.add_handler(CallbackQueryHandler(admin_cb, pattern=r"^admin:"))
     app.add_handler(CallbackQueryHandler(nav_cb, pattern=r"^nav:"))
 
     app.add_handler(CallbackQueryHandler(nav_cb))
